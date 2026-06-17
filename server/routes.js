@@ -63,7 +63,12 @@ function holdingRow(h) {
   const ret = cost > 0 ? ((h.price / cost) - 1) * 100 : 0;
   return { ...h, value: Math.round(value * 100) / 100, ret: Math.round(ret * 100) / 100 };
 }
-function planRow(p) { return { id: p.id, kind: p.kind, name: p.name, ...jparse(p.data, {}) }; }
+// Spread the stored `data` FIRST, then let the real columns win. Older clients
+// saved the whole plan object — including its temporary "p<timestamp>" id — so a
+// stale `id`/`kind`/`name` can live inside `data`; if it spreads last it shadows
+// the real primary key and the id handed to the client matches no row on update
+// (PUT/DELETE then 404). Real columns last = the true id always wins.
+function planRow(p) { return { ...jparse(p.data, {}), id: p.id, kind: p.kind, name: p.name }; }
 
 /* ----------------------------------------------------- default budget */
 /* The starter budget a new account begins with (and that the Budget page can
@@ -544,15 +549,16 @@ function register(router) {
   }));
   router.post('/api/foresight/plans', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id, id = newId('fp_'); const b = ctx.body;
-    const { kind, name, ...data } = b;
+    const { id: _ignoredId, kind, name, ...data } = b;   // never let a client-sent id leak into `data`
     db.prepare('INSERT INTO foresight_plans (id,user_id,kind,name,data) VALUES (?,?,?,?,?)').run(
       id, uid, str(kind, 'kind', { required: true }), str(name, 'name'), JSON.stringify(data || {}));
     ctx.json(200, { plan: planRow(ownedRow('foresight_plans', id, uid)) });
   }));
   router.put('/api/foresight/plans/:id', auth.requireAuth(async (req, res, ctx) => {
     const row = ownedRow('foresight_plans', ctx.params.id, ctx.user.id); const b = ctx.body;
-    const { kind, name, ...data } = b;
+    const { id: _ignoredId, kind, name, ...data } = b;   // ignore any client id in the body
     const merged = Object.assign(jparse(row.data, {}), data);
+    delete merged.id; delete merged.kind; delete merged.name;   // purge stale keys saved by older clients
     db.prepare('UPDATE foresight_plans SET kind=?,name=?,data=? WHERE id=? AND user_id=?').run(
       kind != null ? str(kind, 'kind') : row.kind, name != null ? str(name, 'name') : row.name,
       JSON.stringify(merged), row.id, ctx.user.id);
