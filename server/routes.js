@@ -65,6 +65,49 @@ function holdingRow(h) {
 }
 function planRow(p) { return { id: p.id, kind: p.kind, name: p.name, ...jparse(p.data, {}) }; }
 
+/* ----------------------------------------------------- default budget */
+/* The starter budget a new account begins with (and that the Budget page can
+   restore from its empty state). Monthly $ amounts in today's dollars. */
+const DEFAULT_BUDGET = [
+  { label: 'Essentials', cats: [
+    { name: 'Housing', budget: 1700, color: '#c0763e' },
+    { name: 'Groceries', budget: 700, color: '#7a9a52' },
+    { name: 'Utilities', budget: 260, color: '#9a8048' },
+    { name: 'Transport', budget: 300, color: '#5a93a8' },
+    { name: 'Insurance', budget: 180, color: '#8a6fae' } ] },
+  { label: 'Lifestyle', cats: [
+    { name: 'Dining', budget: 300, color: '#cf6b3f' },
+    { name: 'Shopping', budget: 400, color: '#b06a8c' },
+    { name: 'Entertainment', budget: 150, color: '#5a8aa8' },
+    { name: 'Subscriptions', budget: 120, color: '#7e7a3c' } ] },
+  { label: 'Health & other', cats: [
+    { name: 'Health & fitness', budget: 250, color: '#4f9a6a' },
+    { name: 'Misc', budget: 240, color: '#a88a72' } ] },
+  { label: 'Savings goals', cats: [
+    { name: 'Emergency fund', budget: 800, color: '#4f9a6a' },
+    { name: 'General savings', budget: 250, color: '#5a93a8' } ] }
+];
+
+/* Create the default groups/categories for a user. No-op (returns false) if the
+   user already has any budget group, so it's safe to call on existing accounts. */
+function seedDefaultBudget(uid) {
+  const existing = db.prepare('SELECT COUNT(*) c FROM budget_groups WHERE user_id = ?').get(uid).c;
+  if (existing > 0) return false;
+  tx(() => {
+    let gi = 0;
+    for (const g of DEFAULT_BUDGET) {
+      const gid = newId('bg_');
+      db.prepare('INSERT INTO budget_groups (id,user_id,label,sort) VALUES (?,?,?,?)').run(gid, uid, g.label, gi++);
+      let ci = 0;
+      for (const c of g.cats) {
+        db.prepare('INSERT INTO budget_categories (id,user_id,group_id,name,budget,color,roll,sort) VALUES (?,?,?,?,?,?,?,?)')
+          .run(newId('bc_'), uid, gid, c.name, c.budget, c.color, 0, ci++);
+      }
+    }
+  });
+  return true;
+}
+
 /* --------------------------------------------------------- rule helper */
 function applyRules(uid, name) {
   if (!name) return null;
@@ -92,6 +135,8 @@ function register(router) {
       'INSERT INTO users (email, name, pw_salt, pw_hash, plan, created_at) VALUES (?,?,?,?,?,?)'
     ).run(email, name, salt, hash, 'free', nowISO());
     db.prepare('INSERT INTO settings (user_id, data) VALUES (?, ?)').run(info.lastInsertRowid, '{}');
+    // New accounts start with the default budget groups/categories.
+    try { seedDefaultBudget(info.lastInsertRowid); } catch (e) { console.error('seedDefaultBudget failed:', e); }
     const user = auth.getUserById(info.lastInsertRowid);
     ctx.json(200, { token: auth.makeToken(user.id), user: auth.publicUser(user) });
   });
@@ -354,6 +399,11 @@ function register(router) {
     ownedRow('budget_categories', ctx.params.id, ctx.user.id);
     db.prepare('DELETE FROM budget_categories WHERE id=? AND user_id=?').run(ctx.params.id, ctx.user.id);
     ctx.json(200, { ok: true });
+  }));
+  router.post('/api/budget/seed', auth.requireAuth(async (req, res, ctx) => {
+    // Restore the default starter budget. Only seeds when the user has no groups.
+    const created = seedDefaultBudget(ctx.user.id);
+    ctx.json(200, { ok: true, created });
   }));
   router.post('/api/budget/cover', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id; const moves = Array.isArray(ctx.body.moves) ? ctx.body.moves : [];

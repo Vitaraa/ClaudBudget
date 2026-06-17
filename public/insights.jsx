@@ -190,7 +190,7 @@ function MonthlyReviewModal({ onClose, cycleStartDay = 1 }) {
             <button className="set-close" onClick={onClose} aria-label="Close summary">{"×"}</button>
           </div>
           <div className="rev-empty">
-            <Icon name="calendar" />
+            <span className="rev-empty-ico"><Icon name="calendar" /></span>
             <p>Once you've completed a full month with some transactions, Claud will recap your income, spending, and savings here.</p>
           </div>
         </div>

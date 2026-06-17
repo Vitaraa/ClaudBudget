@@ -140,15 +140,27 @@ function BudgetPage({ coverStyle = "suggested" }) {
   const groups = PG_BUDGET_STORE.get();
   // modal: null | { mode: "add", group } | { mode: "edit", cat, group }
   const [modal, setModal] = pgUseState(null);
+  // add-group modal (separate, deliberate action — distinct from adding a category)
+  const [groupModal, setGroupModal] = pgUseState(false);
   // drag-to-reorder categories within a group: { group, id } of the row being dragged
   const [drag, setDrag] = pgUseState(null);
 
-  // header "+ Add budget" button (lives in app.jsx) fires this event
+  // "+ Add category" (header, in app.jsx) and "+ New group" (this page) fire these
+  // events. Reads the live store inside the handler so the deps stay empty/stable.
   React.useEffect(() => {
-    const open = () => setModal({ mode: "add", group: groups[0] ? groups[0].id : "" });
-    window.addEventListener("claud:add-budget", open);
-    return () => window.removeEventListener("claud:add-budget", open);
-  }, [groups]);
+    const addCat = () => {
+      const gs = PG_BUDGET_STORE.get();
+      if (!gs.length) { setGroupModal(true); return; }   // no group yet → create one first
+      setModal({ mode: "add", group: gs[0].id });
+    };
+    const addGroup = () => setGroupModal(true);
+    window.addEventListener("claud:add-budget", addCat);
+    window.addEventListener("claud:add-group", addGroup);
+    return () => { window.removeEventListener("claud:add-budget", addCat); window.removeEventListener("claud:add-group", addGroup); };
+  }, []);
+
+  function seedStarter() { ClaudActions.seedStarterBudget(); }
+  function saveGroup(label) { setGroupModal(false); if (label && label.trim()) ClaudActions.addBudgetGroup(label.trim()); }
 
   const cats = groups.flatMap((g) => g.cats);
   const totalBudget = cats.reduce((s, c) => s + c.budget + (rollover ? c.roll : 0), 0);
@@ -294,10 +306,14 @@ function BudgetPage({ coverStyle = "suggested" }) {
       {/* Empty slate for a brand-new user */}
       {groups.length === 0 &&
         <Card widget>
-          <div className="cat-empty" style={{ textAlign: "center", padding: "28px 16px" }}>
-            <div style={{ fontSize: "var(--text-base)", color: "var(--text)", marginBottom: 6 }}>No budget categories yet.</div>
-            <div style={{ marginBottom: 14 }}>Add your first category to start tracking what you plan to spend each month. Spending fills in automatically as transactions come in.</div>
-            {Button && <Button variant="primary" size="sm" onClick={() => window.dispatchEvent(new CustomEvent("claud:add-budget"))}><Icon name="plus" /> Add a budget category</Button>}
+          <div className="bud-empty">
+            <span className="bud-empty-ico"><Icon name="wallet" /></span>
+            <div className="bud-empty-title">No budget categories yet</div>
+            <p className="bud-empty-sub">Start with a ready-made set of categories — Essentials, Lifestyle, Health &amp; other, and Savings goals — or build your own from scratch. Spending fills in automatically as transactions come in.</p>
+            <div className="bud-empty-actions">
+              {Button && <Button variant="primary" size="sm" onClick={seedStarter}>Add starter categories</Button>}
+              {Button && <Button variant="ghost" size="sm" onClick={() => setGroupModal(true)}><Icon name="plus" /> New group</Button>}
+            </div>
           </div>
         </Card>}
 
@@ -355,9 +371,52 @@ function BudgetPage({ coverStyle = "suggested" }) {
           </Card>);
       })}
 
+      {/* Add another group — the deliberate counterpart to "Add category" */}
+      {groups.length > 0 &&
+        <button className="bud-add-group" onClick={() => setGroupModal(true)}>
+          <Icon name="plus" /> New group
+        </button>}
+
       {modal && <BudgetModal modal={modal} groups={groups} onClose={() => setModal(null)} onSave={saveCat} onDelete={(id) => { removeCat(id); setModal(null); }} />}
+      {groupModal && <AddGroupModal onClose={() => setGroupModal(false)} onSave={saveGroup} />}
       {cover && <CoverOverspendModal over={cover} sources={coverSources} style={coverStyle} onApply={applyCover} onClose={() => setCover(null)} />}
     </React.Fragment>);
+}
+
+/* ---- Add a budget group ---- */
+function AddGroupModal({ onClose, onSave }) {
+  const { Button } = PG;
+  const [label, setLabel] = pgUseState("");
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const valid = label.trim().length > 0;
+  function submit() { if (valid) onSave(label.trim()); }
+  return (
+    <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fs-modal" role="dialog" aria-modal="true" aria-label="Add budget group" style={{ maxWidth: 440 }}>
+        <div className="fs-modal-head">
+          <span className="fs-modal-title">New group</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+        <div className="fs-grid">
+          <label className="fs-field full">
+            <span>Group name</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Essentials" autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          </label>
+        </div>
+        <div className="fs-modal-foot">
+          <span className="fs-foot-note">Groups organize your categories (Essentials, Lifestyle…).</span>
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={submit}>Add group</Button>}
+          </div>
+        </div>
+      </div>
+    </div>);
 }
 
 /* ---- Add / edit a budget category ---- */

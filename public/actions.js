@@ -72,6 +72,7 @@
 
     // budget
     addBudgetGroup: function (label) { return API.post('/api/budget/groups', { label: label }).then(done).catch(fail); },
+    seedStarterBudget: function () { return API.post('/api/budget/seed', {}).then(done).catch(fail); },
     updateBudgetGroup: function (id, patch) { return API.put('/api/budget/groups/' + id, patch).then(done).catch(fail); },
     deleteBudgetGroup: function (id) { return API.del('/api/budget/groups/' + id).then(done).catch(fail); },
     addCategory: function (c) { return API.post('/api/budget/categories', c).then(done).catch(fail); },

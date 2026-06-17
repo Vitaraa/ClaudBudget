@@ -25,7 +25,7 @@ const NAV = ["Dashboard", "Accounts", "Transactions", "Recurring", "Cash Flow", 
 const PAGE_ACTION = {
   Accounts: "Add account",
   Transactions: "Add transaction",
-  Budget: "Add budget",
+  Budget: "Add category",
   Goals: "New goal",
   Investments: "Add investment"
 };
@@ -202,7 +202,11 @@ function Icon({ name, ...rest }) {
     wallet: <g {...P}><path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2" /><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M16 12.5h.01M21 11h-4a1.5 1.5 0 0 0 0 3h4" /></g>,
     laptop: <g {...P}><rect x="4" y="5" width="16" height="11" rx="2" /><path d="M2 20h20" /></g>
   };
-  return <svg viewBox="0 0 24 24" {...rest}>{paths[name]}</svg>;
+  // Default to text-sized (1em) so an icon never falls back to the SVG default
+  // of 300x150 when no surrounding CSS constrains it. Any explicit width/height,
+  // style, or CSS rule still overrides this (rest is spread after; CSS/inline
+  // styles win over presentational attributes).
+  return <svg viewBox="0 0 24 24" width="1em" height="1em" {...rest}>{paths[name]}</svg>;
 }
 
 /* ============================================================

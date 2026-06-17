@@ -113,37 +113,33 @@ const FS_EXPENSE_BASE = [
   { cat: "Health & insurance", amt: 4200 }
 ];
 
-/* The projected-budget table's expense rows are derived from the live Budget
-   categories (ClaudData.dashCategories). Each monthly budget maps onto one of
-   Foresight's annual expense rows (× 12). Unmapped (custom) categories fall into
-   Lifestyle. A brand-new user has no categories, so the static base above is used
-   as a sensible default. */
-const FS_EXPENSE_ORDER = ["Housing", "Food & dining", "Transport", "Lifestyle", "Utilities", "Health & insurance"];
-const FS_BUDGET_MAP = {
-  "Housing": "Housing",
-  "Groceries": "Food & dining",
-  "Dining": "Food & dining",
-  "Transport": "Transport",
-  "Utilities": "Utilities",
-  "Insurance": "Health & insurance",
-  "Health & fitness": "Health & insurance",
-  "Shopping": "Lifestyle",
-  "Entertainment": "Lifestyle",
-  "Subscriptions": "Lifestyle",
-  "Misc": "Lifestyle"
-};
-function fsExpenseBaseFromBudgets(cats) {
-  // `cats` is the live, flat list of budget categories from the store
-  // (ClaudData.dashCategories: { name, budget, ... } with a MONTHLY budget).
-  // A brand-new user has none, so fall back to the sensible static base.
-  if (!cats || !cats.length) return FS_EXPENSE_BASE;
-  const totals = {};
-  FS_EXPENSE_ORDER.forEach((c) => { totals[c] = 0; });
-  cats.forEach((c) => {
-    const target = FS_BUDGET_MAP[c.name] || "Lifestyle";
-    totals[target] = (totals[target] || 0) + (Number(c.budget) || 0) * 12;
+/* The projected-budget table's expense rows mirror the live Budget categories
+   one-for-one, by name (annual = the monthly budget × 12). So if you only budget
+   for Food and Housing, the projection shows exactly those two expense rows.
+   The user can hide rows they don't want to project and add custom ones; both
+   live in settings (fsHiddenRows / fsExtraRows) so they persist. A brand-new
+   user with no categories at all falls back to a sensible static base. */
+function fsExpenseRows(cats, hidden, extra) {
+  const hide = new Set(hidden || []);
+  const rows = [];
+  const seen = new Set();
+  (cats || []).forEach((c) => {
+    if (!c || !c.name || hide.has(c.name) || seen.has(c.name)) return;
+    seen.add(c.name);
+    rows.push({ cat: c.name, amt: Math.round((Number(c.budget) || 0) * 12) });
   });
-  return FS_EXPENSE_ORDER.map((cat) => ({ cat, amt: Math.round(totals[cat] || 0) }));
+  (extra || []).forEach((e) => {
+    if (!e || !e.name || hide.has(e.name) || seen.has(e.name)) return;
+    seen.add(e.name);
+    rows.push({ cat: e.name, amt: Math.round(Number(e.amt) || 0) });
+  });
+  if (!rows.length) {
+    // genuinely nothing yet → static default. If the user hid everything they
+    // had, respect that and show an empty expense section.
+    if ((!cats || !cats.length) && (!extra || !extra.length)) return FS_EXPENSE_BASE.slice();
+    return [];
+  }
+  return rows;
 }
 
 /* Example plans — kept for reference only. The page now starts from the live
@@ -191,14 +187,14 @@ function fsBuildModel(plans, overrides, years, expenseBase) {
       const o = ov(b.cat, y);
       return { year: y, value: o != null ? o : b.amt, locked: false, edited: o != null };
     });
-    incomeRows.push({ cat: b.cat, cells });
+    incomeRows.push({ cat: b.cat, cells, fillable: true, removable: false });
   });
   plans.filter((p) => p.kind === "pension").forEach((p) => {
-    incomeRows.push({ cat: p.name || "Pension", cells: years.map((y) => ({ year: y, value: y >= p.year ? p.amount : 0, locked: true })) });
+    incomeRows.push({ cat: p.name || "Pension", planDriven: true, cells: years.map((y) => ({ year: y, value: y >= p.year ? p.amount : 0, locked: true })) });
   });
   plans.filter((p) => p.kind === "income").forEach((p) => {
     const eY = p.end || p.year;
-    incomeRows.push({ cat: p.name || "Income", cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
+    incomeRows.push({ cat: p.name || "Income", planDriven: true, cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
   });
 
   // ---- expense rows ----
@@ -208,7 +204,9 @@ function fsBuildModel(plans, overrides, years, expenseBase) {
     return y < house.year + (house.term || 25) ? Math.round(fsMortgage(loan, house.rate || 5.8, house.term || 25) * 12) : 0;
   };
   const expenseRows = [];
+  let hasHousing = false;
   expBase.forEach((b) => {
+    if (b.cat === "Housing") hasHousing = true;
     const cells = years.map((y) => {
       if (b.cat === "Housing") {
         const h = houseAnnual(y);
@@ -217,15 +215,24 @@ function fsBuildModel(plans, overrides, years, expenseBase) {
       const o = ov(b.cat, y);
       return { year: y, value: o != null ? o : b.amt, locked: false, edited: o != null };
     });
-    expenseRows.push({ cat: b.cat, cells });
+    // Budget-derived (and custom) rows can be edited, range-filled, and removed.
+    expenseRows.push({ cat: b.cat, cells, fillable: true, removable: true });
   });
+  // A house plan with no "Housing" budget category still needs its mortgage to
+  // show up — add a dedicated, plan-driven Housing row in that case.
+  if (house && !hasHousing) {
+    expenseRows.push({ cat: "Housing", planDriven: true, cells: years.map((y) => {
+      const h = houseAnnual(y);
+      return h != null ? { year: y, value: h, locked: true } : { year: y, value: 0, locked: true };
+    }) });
+  }
   plans.filter((p) => p.kind === "kids").forEach((p) => {
     const eY = p.end || p.year;
-    expenseRows.push({ cat: p.name || "Child", cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
+    expenseRows.push({ cat: p.name || "Child", planDriven: true, cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
   });
   plans.filter((p) => p.kind === "expense").forEach((p) => {
     const eY = p.end || p.year;
-    expenseRows.push({ cat: p.name || "Expense", cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
+    expenseRows.push({ cat: p.name || "Expense", planDriven: true, cells: years.map((y) => ({ year: y, value: y >= p.year && y <= eY ? p.amount : 0, locked: true })) });
   });
 
   const totals = years.map((y, i) => {
@@ -282,6 +289,7 @@ function fsSimulate(model, plans, years, startNW) {
 function FsChart({ series, markers, onDragYear, onCommit, onClickMarker }) {
   const W = 940, H = 320, padL = 60, padR = 22, padT = 22, padB = 30;
   const wrapRef = fsUseRef(null);
+  const svgRef = fsUseRef(null);
   const dragRef = fsUseRef(null);
   const [hover, setHover] = fsUseState(null);
 
@@ -316,34 +324,70 @@ function FsChart({ series, markers, onDragYear, onCommit, onClickMarker }) {
     return v;
   };
 
-  function pointerYear(e) {
+  // clientX (viewport px) -> nearest year, clamped to the chart's domain.
+  function clientToYear(clientX) {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return null;
+    const px = (clientX - r.left) / r.width * W;
+    return Math.max(yMin, Math.min(yMax, yearAtX(px)));
+  }
+
+  // Hover crosshair only — the drag itself is handled by document-level pointer
+  // listeners (see startDrag) so it keeps working when the pointer leaves the SVG.
+  function onHover(e) {
+    if (dragRef.current) return;            // mid-drag: ignore hover
     const r = e.currentTarget.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width * W;
-    return { px, year: Math.max(yMin, Math.min(yMax, yearAtX(px))) };
-  }
-  function onMove(e) {
-    const { px, year } = pointerYear(e);
-    if (dragRef.current) {
-      if (year !== dragRef.current.year) { dragRef.current = { ...dragRef.current, year, moved: true }; onDragYear(dragRef.current.id, year); }
-      return;
-    }
-    // nearest series index for hover tooltip
     let best = 0, bd = Infinity;
     series.forEach((p, i) => { const d = Math.abs(xOf(p.year) - px); if (d < bd) { bd = d; best = i; } });
     setHover(best);
   }
-  function endDrag() {
-    if (dragRef.current) {
-      const d = dragRef.current; dragRef.current = null;
-      if (d.moved) onCommit(); else onClickMarker(d.id);
-    }
+
+  // Begin dragging a plan marker. Pointer events + capture make this robust:
+  // it survives the pointer leaving the SVG, never starts a native element/text
+  // drag (which is what surfaced the "<host> not found" navigation error), and
+  // always commits or clears on release.
+  function startDrag(e, m) {
+    if (e.button != null && e.button !== 0) return;   // left button / touch only
+    e.preventDefault();
+    e.stopPropagation();
+    setHover(null);
+    dragRef.current = { id: m.id, year: m.year, moved: false };
+
+    const move = (ev) => {
+      if (!dragRef.current) return;
+      const cx = ev.clientX != null ? ev.clientX : (ev.touches && ev.touches[0] && ev.touches[0].clientX);
+      if (cx == null) return;
+      const year = clientToYear(cx);
+      if (year != null && year !== dragRef.current.year) {
+        dragRef.current.year = year;
+        dragRef.current.moved = true;
+        onDragYear(dragRef.current.id, year);
+      }
+      if (ev.cancelable) ev.preventDefault();
+    };
+    const end = () => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      if (!d) return;
+      if (d.moved) onCommit(d.id, d.year); else onClickMarker(d.id);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
   }
   const hp = hover != null ? series[hover] : null;
 
   return (
     <div className="fs-chart-wrap" ref={wrapRef}>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Net-worth projection"
-        onMouseMove={onMove} onMouseLeave={() => { setHover(null); endDrag(); }} onMouseUp={endDrag}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Net-worth projection"
+        onMouseMove={onHover} onMouseLeave={() => setHover(null)}
+        onDragStart={(e) => e.preventDefault()} style={{ touchAction: "none" }}>
         <defs>
           <linearGradient id="fsLineGrad" x1="0" y1={padT} x2="0" y2={padT + innerH} gradientUnits="userSpaceOnUse">
             <stop offset={splitOff} stopColor="var(--accent)" />
@@ -369,8 +413,8 @@ function FsChart({ series, markers, onDragYear, onCommit, onClickMarker }) {
         {markers.map((m) => {
           const cx = xOf(m.year), cy = yOf(valueAt(m.year));
           return (
-            <g key={m.id} className="fs-marker"
-              onMouseDown={() => { dragRef.current = { id: m.id, year: m.year, moved: false }; }}>
+            <g key={m.id} className="fs-marker" draggable={false}
+              onPointerDown={(e) => startDrag(e, m)} onDragStart={(e) => e.preventDefault()}>
               <circle cx={cx} cy={cy} r="13" fill="var(--card)" stroke={m.color} strokeWidth="2.4" />
               <g transform={`translate(${cx - 6.5} ${cy - 6.5}) scale(0.5417)`}
                 fill="none" stroke={m.color} strokeWidth="3.3" strokeLinecap="round" strokeLinejoin="round">
@@ -485,11 +529,17 @@ function ForesightPage() {
   const [drag, setDrag] = fsUseState(null);     // { id, year } live override while dragging
   const [modal, setModal] = fsUseState(null);   // { draft, isNew }
   const [menu, setMenu] = fsUseState(false);
+  const [rangeRow, setRangeRow] = fsUseState(null);   // { cat } → range-fill modal
+  const [addRowOpen, setAddRowOpen] = fsUseState(false);
 
-  // Expense rows follow the live Budget categories (monthly budget × 12).
-  // dashCategories is the server-derived, blank-slate-correct source.
+  // Expense rows mirror the live Budget categories one-for-one (monthly × 12).
+  // dashCategories is the server-derived, blank-slate-correct source. Per-user
+  // customizations (rows hidden from / added to the projection) live in settings.
   const budgetCats = data.dashCategories || [];
-  const expenseBase = fsUseMemo(() => fsExpenseBaseFromBudgets(budgetCats), [budgetCats]);
+  const settings = data.settings || {};
+  const hiddenRows = Array.isArray(settings.fsHiddenRows) ? settings.fsHiddenRows : [];
+  const extraRows = Array.isArray(settings.fsExtraRows) ? settings.fsExtraRows : [];
+  const expenseBase = fsUseMemo(() => fsExpenseRows(budgetCats, hiddenRows, extraRows), [budgetCats, hiddenRows, extraRows]);
   const budgetLinked = !!(budgetCats && budgetCats.length);
 
   // plans with the live drag year applied, so the whole projection moves with the dot
@@ -541,16 +591,82 @@ function ForesightPage() {
   // ---- drag wiring ----
   // Live drag stays local for a smooth feel; the new year is persisted on drop.
   function dragYear(id, year) { setDrag({ id, year }); }
-  function commitDrag() {
-    if (drag) { const d = drag; setDrag(null); ClaudActions.updatePlan(d.id, { year: d.year }); }
+  // Called on drop with the final id/year straight from the chart (not via the
+  // possibly-stale `drag` closure). Keep the dragged year applied until the save
+  // round-trips, so the line doesn't snap back to the old position first.
+  function commitDrag(id, year) {
+    if (id == null || year == null) { setDrag(null); return; }
+    Promise.resolve(ClaudActions.updatePlan(id, { year })).then(() => setDrag(null), () => setDrag(null));
   }
 
-  // ---- budget cell override ----
-  // Empty cell clears the override (server deletes on '' / null); a number sets it.
+  // ---- budget cell override (optimistic = instant) ----
+  // Update the local store first so the table reflects the edit immediately, then
+  // persist. The override forward-fills: a value at year Y applies to Y and every
+  // later year until the next override — so editing one cell updates the whole row.
+  function applyOverrideLocal(cat, year, amount) {
+    const ovs = ClaudData.foresightOverrides;
+    const i = ovs.findIndex((o) => o.cat === cat && o.year === year);
+    if (amount === "" || amount == null) { if (i >= 0) ovs.splice(i, 1); }
+    else if (i >= 0) ovs[i] = { cat, year, amount };
+    else ovs.push({ cat, year, amount });
+  }
   function setCell(cat, year, raw) {
     const amount = (raw === "" || raw == null) ? "" : Math.max(0, Math.round(Number(raw) || 0));
-    ClaudActions.setOverride(cat, year, amount);
+    applyOverrideLocal(cat, year, amount === "" ? null : amount);
+    ClaudStore.emit();                               // instant re-render
+    ClaudActions.setOverride(cat, year, amount);     // persist in the background
   }
+
+  // base (un-edited) annual value for a row — used when reverting after a range
+  function baseAmtFor(cat) {
+    const inc = FS_INCOME_BASE.find((b) => b.cat === cat); if (inc) return inc.amt;
+    const exp = expenseBase.find((b) => b.cat === cat); if (exp) return exp.amt;
+    return 0;
+  }
+  // effective value of a row at year y given current overrides (else its base)
+  function effectiveAt(cat, y) {
+    let best = -Infinity, val = null;
+    overrides.forEach((o) => { if (o.cat === cat && o.year <= y && o.year > best) { best = o.year; val = (o.amount != null ? o.amount : o.amt); } });
+    return val != null ? val : baseAmtFor(cat);
+  }
+  // Set one value across a year range [from..to]; reverts to the prior value after.
+  function fillRange(cat, fromY, toY, rawVal) {
+    const a = Math.max(FS_NOW, Math.min(fromY, toY));
+    const b = Math.min(FS_HORIZON, Math.max(fromY, toY));
+    const v = Math.max(0, Math.round(Number(rawVal) || 0));
+    const revert = Math.round(effectiveAt(cat, a));   // restore this after the range ends
+    const ops = [];
+    // make the range authoritative: clear any overrides strictly inside it
+    overrides.filter((o) => o.cat === cat && o.year > a && o.year <= b).forEach((o) => ops.push({ year: o.year, amount: "" }));
+    ops.push({ year: a, amount: v });
+    if (b + 1 <= FS_HORIZON) ops.push({ year: b + 1, amount: revert });
+    ops.forEach((op) => applyOverrideLocal(cat, op.year, op.amount === "" ? null : op.amount));
+    ClaudStore.emit();
+    ops.forEach((op) => ClaudActions.setOverride(cat, op.year, op.amount));
+    setRangeRow(null);
+  }
+
+  // ---- add / remove projected expense rows (persist in settings) ----
+  function patchSettingsLocal(patch) {
+    ClaudData.settings = Object.assign({}, ClaudData.settings, patch);
+    ClaudStore.emit();
+    ClaudActions.saveSettings(patch);
+  }
+  function removeRow(cat) {
+    if (extraRows.some((e) => e.name === cat)) {            // custom row → delete it
+      patchSettingsLocal({ fsExtraRows: extraRows.filter((e) => e.name !== cat) });
+    } else if (!hiddenRows.includes(cat)) {                 // budget row → hide it
+      patchSettingsLocal({ fsHiddenRows: hiddenRows.concat([cat]) });
+    }
+  }
+  function addRow(name, amt) {
+    const nm = String(name || "").trim();
+    if (!nm) return;
+    const next = extraRows.filter((e) => e.name !== nm).concat([{ name: nm, amt: Math.max(0, Math.round(Number(amt) || 0)) }]);
+    patchSettingsLocal({ fsExtraRows: next, fsHiddenRows: hiddenRows.filter((h) => h !== nm) });
+    setAddRowOpen(false);
+  }
+  function restoreHidden() { patchSettingsLocal({ fsHiddenRows: [] }); }
 
   const sortedMarkers = [...livePlans].sort((a, b) => a.year - b.year);
   const planSub = (p) => {
@@ -649,7 +765,7 @@ function ForesightPage() {
         <div className="widget-head">
           <div>
             <span className="widget-title">Projected budget by year</span>
-            <div className="fs-hint" style={{ marginTop: 4 }}>Annual $. {budgetLinked ? <React.Fragment>Expense rows follow your <b style={{ color: "var(--text)", fontWeight: 600 }}>Budget tab</b> (×12) {"\u00B7"} </React.Fragment> : null}tweak any cell to rebalance the line {"\u00B7"} {"\uD83D\uDD12"} cells are set by a plan {"\u2014"} edit the plan to change those.</div>
+            <div className="fs-hint" style={{ marginTop: 4 }}>Annual $. {budgetLinked ? <React.Fragment>One row per <b style={{ color: "var(--text)", fontWeight: 600 }}>Budget</b> category (×12) {"\u00B7"} </React.Fragment> : null}edit a cell to fill that year onward {"\u00B7"} {"\u2194"} sets a year range {"\u00B7"} {"\u00D7"} removes a row {"\u00B7"} {"\uD83D\uDD12"} cells come from a plan.</div>
           </div>
         </div>
         <div className="fs-table-wrap">
@@ -666,7 +782,13 @@ function ForesightPage() {
               <tr className="fs-section"><td className="fs-row-head">Income</td>{tableYears.map((y) => <td key={y} />)}</tr>
               {tableModel.incomeRows.map((row) =>
                 <tr key={"i-" + row.cat}>
-                  <td className="fs-row-head">{row.cat}</td>
+                  <td className="fs-row-head">
+                    <span className="fs-rh">
+                      <span className="fs-rh-name" title={row.cat}>{row.cat}</span>
+                      {row.fillable &&
+                        <button className="fs-rh-btn" title="Set a value across a year range" aria-label={"Set a range for " + row.cat} onClick={() => setRangeRow({ cat: row.cat })}>{"\u2194"}</button>}
+                    </span>
+                  </td>
                   {row.cells.map((c) =>
                     <td key={c.year}>
                       {c.locked
@@ -681,7 +803,15 @@ function ForesightPage() {
               <tr className="fs-section"><td className="fs-row-head">Expense</td>{tableYears.map((y) => <td key={y} />)}</tr>
               {tableModel.expenseRows.map((row) =>
                 <tr key={"e-" + row.cat}>
-                  <td className="fs-row-head">{row.cat}</td>
+                  <td className="fs-row-head">
+                    <span className="fs-rh">
+                      <span className="fs-rh-name" title={row.cat}>{row.cat}</span>
+                      {row.fillable &&
+                        <button className="fs-rh-btn" title="Set a value across a year range" aria-label={"Set a range for " + row.cat} onClick={() => setRangeRow({ cat: row.cat })}>{"\u2194"}</button>}
+                      {row.removable &&
+                        <button className="fs-rh-btn danger" title="Remove this row from the projection" aria-label={"Remove " + row.cat} onClick={() => removeRow(row.cat)}>{"\u00D7"}</button>}
+                    </span>
+                  </td>
                   {row.cells.map((c) =>
                     <td key={c.year}>
                       {c.locked
@@ -691,6 +821,13 @@ function ForesightPage() {
                   )}
                 </tr>
               )}
+              <tr className="fs-addrow">
+                <td colSpan={tableYears.length + 1}>
+                  <button className="fs-addrow-btn" onClick={() => setAddRowOpen(true)}>+ Add expense row</button>
+                  {hiddenRows.length > 0 &&
+                    <button className="fs-addrow-link" onClick={restoreHidden} title="Show rows you've removed">Restore {hiddenRows.length} hidden</button>}
+                </td>
+              </tr>
               <tr className="fs-subtotal"><td className="fs-row-head">Total expense</td>{tableModel.totals.map((t) => <td key={t.year}>{fsMoney(t.expense)}</td>)}</tr>
 
               <tr className="fs-net"><td className="fs-row-head">Net / yr</td>{tableModel.totals.map((t) => <td key={t.year} className={t.net < 0 ? "neg" : "pos"}>{(t.net >= 0 ? "+" : FS_MINUS) + "$" + Math.abs(t.net).toLocaleString("en-CA")}</td>)}</tr>
@@ -700,7 +837,77 @@ function ForesightPage() {
       </Card>
 
       {modal && <FsModal draft={modal.draft} isNew={modal.isNew} onField={modalField} onSave={saveModal} onDelete={deleteModal} onClose={() => setModal(null)} />}
+      {rangeRow && <FsRangeModal cat={rangeRow.cat} base={baseAmtFor(rangeRow.cat)} onApply={fillRange} onClose={() => setRangeRow(null)} />}
+      {addRowOpen && <FsAddRowModal onAdd={addRow} onClose={() => setAddRowOpen(false)} />}
     </React.Fragment>);
+}
+
+/* ---- Range fill: set one row's value across a span of years ---- */
+function FsRangeModal({ cat, base, onApply, onClose }) {
+  const { Button } = FS;
+  const [from, setFrom] = fsUseState(FS_NOW);
+  const [to, setTo] = fsUseState(Math.min(FS_NOW + 10, FS_TABLE_END));
+  const [val, setVal] = fsUseState(base != null ? base : 0);
+  fsUseEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const numF = (set) => (e) => set(e.target.value === "" ? "" : Number(e.target.value));
+  return (
+    <div className="fs-overlay" onMouseDown={onClose}>
+      <section className="fs-modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <div className="fs-modal-head">
+          <span className="fs-modal-title">Set {cat} across a range</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+        <div className="fs-grid">
+          <label className="fs-field"><span>From year</span><input type="number" value={from} onChange={numF(setFrom)} /></label>
+          <label className="fs-field"><span>To year</span><input type="number" value={to} onChange={numF(setTo)} /></label>
+          <label className="fs-field full"><span>Amount / yr ($)</span><input type="number" value={val} onChange={numF(setVal)} autoFocus /></label>
+        </div>
+        <div className="fs-modal-foot">
+          <span className="fs-foot-note">Applies to {cat} for {from || FS_NOW}{"–"}{to || FS_NOW}; reverts after.</span>
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={() => onApply(cat, Number(from) || FS_NOW, Number(to) || FS_NOW, val)}>Apply</Button>}
+          </div>
+        </div>
+      </section>
+    </div>);
+}
+
+/* ---- Add a custom projected-expense row ---- */
+function FsAddRowModal({ onAdd, onClose }) {
+  const { Button } = FS;
+  const [name, setName] = fsUseState("");
+  const [amt, setAmt] = fsUseState("");
+  fsUseEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const valid = name.trim().length > 0;
+  return (
+    <div className="fs-overlay" onMouseDown={onClose}>
+      <section className="fs-modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <div className="fs-modal-head">
+          <span className="fs-modal-title">Add an expense row</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+        <div className="fs-grid">
+          <label className="fs-field full"><span>Name</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Travel" autoFocus /></label>
+          <label className="fs-field full"><span>Amount / yr ($)</span><input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0" /></label>
+        </div>
+        <div className="fs-modal-foot">
+          <span className="fs-foot-note">A custom projection row {"—"} edit any year afterward.</span>
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={() => valid && onAdd(name, amt)}>Add row</Button>}
+          </div>
+        </div>
+      </section>
+    </div>);
 }
 
 window.ForesightPage = ForesightPage;
