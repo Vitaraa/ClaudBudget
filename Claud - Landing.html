@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-surface="linen">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Claud — See your whole financial future</title>
+
+<!-- Claud design system -->
+<link rel="stylesheet" href="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/styles.css" />
+
+<style>
+  /* ============================================================
+     WARM RE-POINT of the Claud tokens — matches the dashboard.
+     Same component vocabulary; surfaces + accent re-pointed to a
+     warm terracotta / sand / sage system. Semantic soft/line tints
+     derive from --accent via color-mix so accent swaps cascade.
+     ============================================================ */
+  :root[data-theme="light"] {
+    --text: #2b2520;
+    --muted: #8c8074;
+    --hover: rgba(120, 86, 48, 0.06);
+
+    --accent: #7e7a3c;            /* olive (brand) */
+    --accent-contrast: #fbf7ec;
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+    --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
+    --mark-line: #f6f1e4;        /* cream knockout inside the logomark */
+
+    --green: #4f9a6a;            /* warm sage */
+    --green-soft: color-mix(in srgb, var(--green) 15%, transparent);
+    --green-line: color-mix(in srgb, var(--green) 40%, transparent);
+    --red: #cb3a52;             /* crimson-rose, pulled off the terracotta hue */
+    --red-soft: color-mix(in srgb, var(--red) 12%, transparent);
+    --red-line: color-mix(in srgb, var(--red) 40%, transparent);
+    --warn: #cf8a2c;
+    --warn-soft: color-mix(in srgb, var(--warn) 15%, transparent);
+    --warn-line: color-mix(in srgb, var(--warn) 42%, transparent);
+
+    --shadow-menu: 0 12px 30px rgba(74, 48, 24, 0.14);
+    --shadow-pop: 0 14px 34px rgba(74, 48, 24, 0.18);
+    --scrim: rgba(40, 28, 16, 0.4);
+  }
+
+  /* Light surface warmth variants (the "Surface" tweak) */
+  :root[data-theme="light"][data-surface="sand"]  { --bg: #f3ece1; --sidebar: #fbf6ee; --card: #fffbf5; --input-bg: #f0e7d9; --border: #e7dbc8; }
+  :root[data-theme="light"][data-surface="cream"] { --bg: #f8f3ea; --sidebar: #fffdf8; --card: #ffffff; --input-bg: #f3ecdf; --border: #ece2d2; }
+  :root[data-theme="light"][data-surface="linen"] { --bg: #ece3d4; --sidebar: #f7f0e4; --card: #fbf5ec; --input-bg: #e8ddca; --border: #ddcfb8; }
+
+  :root[data-theme="dark"] {
+    --bg: #161513; --sidebar: #1c1b18; --card: #201e1b; --input-bg: #272420; --border: #322f2a;
+    --hover: rgba(255, 244, 232, 0.045);
+    --text: #ece6dc; --muted: #a39785;
+
+    --accent: #9b9550;          /* lighter olive on dark */
+    --accent-contrast: #1a1808;
+    --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+    --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+    --mark-line: #f6f1e4;        /* cream knockout inside the logomark */
+
+    --green: #54bd86; --green-soft: color-mix(in srgb, var(--green) 16%, transparent); --green-line: color-mix(in srgb, var(--green) 42%, transparent);
+    --red: #e85f74; --red-soft: color-mix(in srgb, var(--red) 16%, transparent); --red-line: color-mix(in srgb, var(--red) 44%, transparent);
+    --warn: #e0a24a; --warn-soft: color-mix(in srgb, var(--warn) 16%, transparent); --warn-line: color-mix(in srgb, var(--warn) 44%, transparent);
+
+    --shadow-menu: 0 12px 30px rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --scrim: rgba(0, 0, 0, 0.62);
+    color-scheme: dark;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Layout — these classes are NOT in the shared DS css; they're ours.  */
+  /* ------------------------------------------------------------------ */
+  html { background: var(--bg); }
+  body { margin: 0; min-height: 100vh; background: var(--bg); }
+
+  .lp {
+    display: grid;
+    grid-template-columns: minmax(420px, 0.82fr) minmax(0, 1.18fr);
+    min-height: 100vh;
+    background: var(--bg);
+  }
+  .lp-left { background: var(--bg); }
+
+  /* ---------- LEFT: marketing ---------- */
+  .lp-left {
+    position: relative;
+    padding: clamp(28px, 4.2vw, 64px) clamp(28px, 4.5vw, 76px);
+    display: flex; flex-direction: column;
+    gap: clamp(28px, 3.4vw, 46px);
+    overflow: hidden;
+  }
+  /* a very soft warm wash behind the marketing column */
+  .lp-left::before {
+    content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(120% 90% at 8% -8%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%),
+      radial-gradient(90% 80% at 100% 110%, color-mix(in srgb, var(--green) 7%, transparent), transparent 55%);
+  }
+  .lp-left > * { position: relative; z-index: 1; }
+
+  .brandrow { display: flex; align-items: center; gap: 11px; }
+  .brandrow .mark { width: 36px; height: 36px; display: block; }
+  .brandrow .wordmark { font-size: 1.4rem; font-weight: 700; letter-spacing: var(--tracking-tight); }
+  .brandrow .wordmark .wd-accent { color: var(--accent); }
+  .brandrow .pill {
+    margin-left: 10px; font-size: var(--text-2xs); font-weight: 600;
+    text-transform: uppercase; letter-spacing: var(--tracking-wider);
+    color: var(--muted); border: 1px solid var(--border);
+    padding: 3px 9px; border-radius: var(--radius-pill); white-space: nowrap;
+  }
+
+  .hero { display: flex; flex-direction: column; gap: 18px; max-width: 620px; }
+  .eyebrow {
+    font-size: var(--text-2xs); font-weight: 700; text-transform: uppercase;
+    letter-spacing: var(--tracking-wider); color: var(--accent);
+  }
+  .hero h1 {
+    margin: 0; font-weight: 700; letter-spacing: -0.025em;
+    line-height: 1.04; font-size: clamp(2.3rem, 4.4vw, 3.5rem);
+    text-wrap: balance;
+  }
+  .hero h1 .em { color: var(--accent); }
+  .hero p.sub {
+    margin: 0; color: var(--muted); font-size: clamp(1rem, 1.25vw, 1.18rem);
+    line-height: 1.55; max-width: 30em; text-wrap: pretty;
+  }
+
+  /* ---------- Hero chart card ---------- */
+  .chart-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); padding: 20px 22px 14px;
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+    max-width: 640px;
+  }
+  .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
+  .chart-head .ch-label { font-size: var(--text-xs); color: var(--muted); font-weight: 600; }
+  .chart-head .ch-value {
+    font-size: 2rem; font-weight: 700; letter-spacing: var(--tracking-tight);
+    font-variant-numeric: tabular-nums; line-height: 1.1; margin-top: 3px;
+  }
+  .chart-head .ch-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; text-align: right; }
+  .ch-delta { font-size: var(--text-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .lp-fchart { width: 100%; height: auto; display: block; }
+  .chart-foot {
+    display: flex; align-items: center; gap: 8px; margin-top: 8px;
+    font-size: var(--text-xs); color: var(--muted);
+  }
+  .chart-foot .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+
+  /* ---------- Feature strip ---------- */
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px 26px; max-width: 660px; }
+  .feature { display: flex; flex-direction: column; gap: 9px; }
+  .feature .fi {
+    width: 34px; height: 34px; border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .feature .fi svg { width: 19px; height: 19px; }
+  .feature h3 { margin: 0; font-size: var(--text-sm); font-weight: 700; letter-spacing: -0.01em; }
+  .feature p { margin: 0; font-size: var(--text-xs); color: var(--muted); line-height: 1.45; text-wrap: pretty; }
+
+  .lp-left-foot { margin-top: auto; font-size: var(--text-xs); color: var(--muted); display: flex; gap: 18px; flex-wrap: wrap; }
+  .lp-left-foot a { color: var(--muted); text-decoration: none; }
+  .lp-left-foot a:hover { color: var(--text); }
+
+  /* ---------- RIGHT: auth ---------- */
+  .lp-right {
+    order: -1;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    padding: clamp(28px, 4vw, 56px) clamp(24px, 3vw, 52px);
+  }
+  .auth { width: 100%; max-width: 376px; display: flex; flex-direction: column; }
+  .auth-head { margin-bottom: 22px; }
+  .auth-head h2 { margin: 0 0 6px; font-size: 1.6rem; font-weight: 700; letter-spacing: var(--tracking-tight); }
+  .auth-head p { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+
+  .gbtn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 11px 16px; border-radius: var(--radius-md);
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    font-family: inherit; font-size: var(--text-body); font-weight: 600; cursor: pointer;
+    transition: background var(--dur-fast), border-color var(--dur-fast);
+  }
+  .gbtn:hover { background: var(--hover); border-color: color-mix(in srgb, var(--text) 22%, var(--border)); }
+  .gbtn svg { width: 18px; height: 18px; }
+
+  .divider { display: flex; align-items: center; gap: 14px; margin: 18px 0; color: var(--muted); font-size: var(--text-xs); }
+  .divider::before, .divider::after { content: ""; height: 1px; flex: 1; background: var(--border); }
+
+  .form { display: flex; flex-direction: column; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 0; }
+  .field label { font-size: var(--text-xs); font-weight: 600; color: var(--text); margin-bottom: 5px; }
+  .field input { margin-top: 0; padding: 11px 12px; }
+  .field .field-row { display: flex; align-items: center; justify-content: space-between; }
+  .pw-wrap { position: relative; display: flex; }
+  .pw-wrap input { padding-right: 64px; }
+  .pw-toggle {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--muted); font-family: inherit;
+    font-size: var(--text-xs); font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: var(--radius-xs);
+  }
+  .pw-toggle:hover { color: var(--text); background: var(--hover); }
+
+  .auth .btn.primary { padding: 12px 16px; margin-top: 2px; }
+  .auth-foot { margin-top: 20px; font-size: var(--text-sm); color: var(--muted); text-align: center; }
+  .auth-legal { margin-top: 18px; font-size: var(--text-2xs); color: var(--muted); line-height: 1.5; text-align: center; }
+  .auth-legal a { color: var(--muted); }
+
+  .field-err { font-size: var(--text-2xs); color: var(--red); margin-top: 5px; font-weight: 500; min-height: 0; }
+  .field input.invalid { border-color: var(--red-line); }
+
+  /* small entrance for the success toast */
+  .toast {
+    margin-top: 14px; font-size: var(--text-sm);
+    animation: rise .35s var(--ease-standard) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- Stacked layout (tweak) ---------- */
+  .lp.stacked { grid-template-columns: 1fr; }
+  .lp.stacked .lp-right { order: 0; border-right: none; border-left: none; border-top: 1px solid var(--border); }
+  .lp.stacked .auth { max-width: 420px; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 1080px) {
+    .features { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 880px) {
+    .lp { grid-template-columns: 1fr; }
+    .lp-right { order: 0; border-left: none; border-right: none; border-top: 1px solid var(--border); }
+  }
+  @media (max-width: 540px) {
+    .features { grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  }
+
+  /* keep the tweak-panel readable; it ships its own light styling */
+  [data-theme="dark"] #__tweaks_root { color-scheme: dark; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + DS bundle (plain JS) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/_ds_bundle.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Babel components -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="landing.jsx"></script>
+</body>
+</html>

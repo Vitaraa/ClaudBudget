@@ -1,0 +1,7 @@
+# Local server data — NEVER commit (contains the JWT signing secret + your database)
+data/
+node_modules/
+.env
+*.log
+.DS_Store
+.git/

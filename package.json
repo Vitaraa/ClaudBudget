@@ -1,0 +1,15 @@
+{
+  "name": "claud-budget",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Claud — personal finance dashboard. Node + SQLite backend serving a static React frontend.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {}
+}

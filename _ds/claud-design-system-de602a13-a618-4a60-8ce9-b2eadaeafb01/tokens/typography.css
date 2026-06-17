@@ -1,0 +1,42 @@
+/* ============================================================================
+   Claud — Typography tokens
+   The product uses the native system UI stack: zero webfont latency, and it
+   feels at home on every OS — the right call for a calm, utilitarian finance
+   tool. Numerals lean on tabular-nums so figures align in tables and lists.
+   ========================================================================== */
+
+:root {
+  /* ---- Families ---- */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* ---- Type scale (rem) ----
+     Built around a 16px root. Display sizes are tight-tracked; body stays at
+     comfortable reading metrics. */
+  --text-display: 2rem;     /* 32px — Foresight contribution figure, hero numbers */
+  --text-h1: 1.5rem;        /* 24px — page titles, big stat values */
+  --text-h2: 1.25rem;       /* 20px — brand wordmark, section heads */
+  --text-lg: 1.05rem;       /* ~17px — modal titles */
+  --text-body: 0.95rem;     /* ~15px — default body, inputs, buttons */
+  --text-sm: 0.9rem;        /* ~14px — secondary copy, table cells */
+  --text-xs: 0.82rem;       /* ~13px — captions, chips, muted labels */
+  --text-2xs: 0.72rem;      /* ~11.5px — uppercase eyebrows, badges, table heads */
+
+  /* ---- Weights ---- */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-extrabold: 800;  /* institution badges, tiny all-caps marks */
+
+  /* ---- Tracking ---- */
+  --tracking-tight: -0.02em; /* display + headings + values */
+  --tracking-wide: 0.03em;   /* uppercase table heads */
+  --tracking-wider: 0.04em;  /* uppercase eyebrows / section labels */
+
+  /* ---- Line heights ---- */
+  --leading-tight: 1.2;
+  --leading-snug: 1.4;
+  --leading-normal: 1.5;
+}

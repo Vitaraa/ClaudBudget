@@ -1,0 +1,44 @@
+/* ============================================================================
+   Claud — Spacing, radius & layout tokens
+   Spacing follows a soft 4px base, but the product's lived-in rhythm is built
+   on a few repeated values: 8 / 10 / 12 / 16 / 18px. Cards pad 18px; grids gap
+   16px; controls pad ~10–12px. Radii are gentle, never pill-soft except for
+   chips, bars and avatars.
+   ========================================================================== */
+
+:root {
+  /* ---- Spacing scale (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 18px;   /* card padding */
+  --space-8: 20px;
+  --space-9: 24px;   /* page gutters / main padding */
+  --space-10: 28px;
+  --space-12: 40px;
+
+  /* ---- Corner radius ---- */
+  --radius-xs: 5px;    /* tiny inline inputs, sub-tags */
+  --radius-sm: 6px;    /* segmented controls, menu items */
+  --radius-md: 9px;    /* inputs, buttons, chips' siblings */
+  --radius-lg: 10px;   /* menus, status panels, user button */
+  --radius-xl: 14px;   /* cards & modals — the signature radius */
+  --radius-pill: 999px;/* chips, progress bars, avatars, dots */
+
+  /* ---- Layout ---- */
+  --sidebar-width: 230px;
+  --content-max: 1140px;   /* main content column */
+  --reading-max: 720px;    /* single-column reading width */
+
+  /* ---- Hairline ---- */
+  --border-width: 1px;
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  --dur-fast: 0.12s; /* @kind other */
+  --dur-base: 0.2s; /* @kind other */
+  --dur-slow: 0.3s; /* @kind other */
+}

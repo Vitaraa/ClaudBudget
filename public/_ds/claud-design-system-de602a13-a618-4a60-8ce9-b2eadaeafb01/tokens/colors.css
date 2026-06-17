@@ -1,0 +1,82 @@
+/* ============================================================================
+   Claud — Color tokens
+   Dark is the hero theme (default :root). Light is a polished sibling, applied
+   via :root[data-theme="light"]. Toggle by setting that attribute on <html>.
+
+   Three semantic colors carry meaning everywhere in the product:
+     accent (indigo)  — brand, selection, primary actions, links, the live line
+     green            — positive / income / on-track / under budget
+     red              — negative / expense / over budget / running out
+   A fourth, amber/warn, is reserved for "needs review" flags only.
+   ========================================================================== */
+
+:root {
+  /* ---- Surfaces (dark) ---- */
+  --bg: #0f1115;            /* app background, deepest layer */
+  --sidebar: #14171d;       /* left navigation rail */
+  --card: #181b22;          /* cards, popovers, menus, modals */
+  --input-bg: #20242d;      /* inputs, chips, segmented controls */
+  --border: #262a33;        /* hairlines, card borders, dividers */
+  --hover: rgba(255, 255, 255, 0.04); /* row / nav hover wash */
+
+  /* ---- Text ---- */
+  --text: #e7e9ee;          /* primary copy, values, headings */
+  --muted: #8b909c;         /* labels, captions, secondary copy */
+
+  /* ---- Accent (blue) ---- */
+  --accent: #3a7bd5;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(58, 123, 213, 0.16);   /* selected chip / hover tint */
+  --accent-line: rgba(58, 123, 213, 0.42);
+
+  /* ---- Semantic: positive / negative / review ---- */
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.12);
+  --green-line: rgba(52, 211, 153, 0.35);
+  --red: #f87171;
+  --red-soft: rgba(248, 113, 113, 0.12);
+  --red-line: rgba(248, 113, 113, 0.40);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-line: rgba(251, 191, 36, 0.40);
+
+  /* ---- Brand mark ---- */
+  --brand-cloud: #00aad2;   /* the cyan cloud in the colored logomark */
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  /* ---- Surfaces (light) ---- */
+  --bg: #f4f6f9;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --input-bg: #eef1f6;
+  --border: #e2e6ee;
+  --hover: rgba(0, 0, 0, 0.04);
+
+  /* ---- Text ---- */
+  --text: #1a1d24;
+  --muted: #687184;
+
+  /* ---- Accent (blue holds across themes) ---- */
+  --accent: #2f6dcb;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(47, 109, 203, 0.12);
+  --accent-line: rgba(47, 109, 203, 0.40);
+
+  /* ---- Semantic (deeper on light for contrast) ---- */
+  --green: #16a34a;
+  --green-soft: rgba(22, 163, 74, 0.10);
+  --green-line: rgba(22, 163, 74, 0.30);
+  --red: #dc2626;
+  --red-soft: rgba(220, 38, 38, 0.08);
+  --red-line: rgba(220, 38, 38, 0.30);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.10);
+  --warn-line: rgba(217, 119, 6, 0.35);
+
+  --brand-cloud: #00aad2;
+
+  color-scheme: light;
+}

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-surface="linen">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Claud — Upgrade to Pro</title>
+
+<!-- Claud design system -->
+<link rel="stylesheet" href="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/styles.css" />
+
+<style>
+  /* ============================================================
+     WARM RE-POINT of the Claud tokens — same as the dashboard.
+     ============================================================ */
+  :root[data-theme="light"] {
+    --text: #2b2520;
+    --muted: #8c8074;
+    --hover: rgba(120, 86, 48, 0.06);
+
+    --accent: #7e7a3c;            /* olive (brand) */
+    --accent-contrast: #fbf7ec;
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+    --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
+
+    --green: #4f9a6a;
+    --green-soft: color-mix(in srgb, var(--green) 15%, transparent);
+    --green-line: color-mix(in srgb, var(--green) 40%, transparent);
+    --red: #cb3a52;
+    --red-soft: color-mix(in srgb, var(--red) 12%, transparent);
+    --red-line: color-mix(in srgb, var(--red) 40%, transparent);
+    --warn: #cf8a2c;
+
+    --shadow-menu: 0 12px 30px rgba(74, 48, 24, 0.14);
+    --shadow-pop: 0 14px 34px rgba(74, 48, 24, 0.18);
+    --scrim: rgba(40, 28, 16, 0.4);
+  }
+  :root[data-theme="light"][data-surface="sand"]  { --bg: #f3ece1; --sidebar: #fbf6ee; --card: #fffbf5; --input-bg: #f0e7d9; --border: #e7dbc8; }
+  :root[data-theme="light"][data-surface="cream"] { --bg: #f8f3ea; --sidebar: #fffdf8; --card: #ffffff; --input-bg: #f3ecdf; --border: #ece2d2; }
+  :root[data-theme="light"][data-surface="linen"] { --bg: #ece3d4; --sidebar: #f7f0e4; --card: #fbf5ec; --input-bg: #e8ddca; --border: #ddcfb8; }
+
+  :root[data-theme="dark"] {
+    --bg: #161513; --sidebar: #1c1b18; --card: #201e1b; --input-bg: #272420; --border: #322f2a;
+    --hover: rgba(255, 244, 232, 0.045);
+    --text: #ece6dc; --muted: #a39785;
+
+    --accent: #9b9550;
+    --accent-contrast: #1a1808;
+    --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+    --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+
+    --green: #54bd86; --green-soft: color-mix(in srgb, var(--green) 16%, transparent); --green-line: color-mix(in srgb, var(--green) 42%, transparent);
+    --red: #e85f74; --red-soft: color-mix(in srgb, var(--red) 16%, transparent); --red-line: color-mix(in srgb, var(--red) 44%, transparent);
+    --warn: #e0a24a;
+
+    --shadow-menu: 0 12px 30px rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --scrim: rgba(0, 0, 0, 0.62);
+    color-scheme: dark;
+  }
+
+  html, body { margin: 0; height: 100%; background: var(--bg); }
+  #root { height: 100%; }
+
+  /* ------------------------------------------------------------------ */
+  /*  The "scene": dashboard backdrop + scrim + centred upgrade modal     */
+  /*  Lives inside a design-canvas artboard.                              */
+  /* ------------------------------------------------------------------ */
+  .scene { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+  .scene-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+  .scene-scrim { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); }
+  .scene-modal-wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 40px; }
+
+  /* ---------- Modal shell ---------- */
+  .up {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); box-shadow: 0 28px 70px rgba(20, 14, 8, 0.5);
+    width: 100%; display: flex; flex-direction: column; overflow: hidden;
+    max-height: calc(100vh - 64px); overflow-y: auto;
+  }
+  .up.cards { max-width: 720px; }
+  .up.table { max-width: 600px; }
+
+  .up-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 18px; }
+  .up-head-text h2 { margin: 0; font-size: 1.4rem; font-weight: 700; letter-spacing: var(--tracking-tight); }
+  .up-head-text p { margin: 6px 0 0; font-size: var(--text-sm); color: var(--muted); line-height: 1.5; max-width: 42ch; text-wrap: pretty; }
+  .up-close { flex-shrink: 0; background: none; border: none; color: var(--muted); font-size: 23px; line-height: 1; cursor: pointer; padding: 2px 8px; border-radius: var(--radius-sm); transition: color var(--dur-fast), background var(--dur-fast); }
+  .up-close:hover { color: var(--text); background: var(--hover); }
+
+  /* ---------- Billing segmented ---------- */
+  .up-billing { display: flex; align-items: center; gap: 12px; padding: 0 24px 18px; }
+  .up-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--input-bg); }
+  .up-seg button { background: none; border: none; padding: 7px 15px; font-family: inherit; font-size: var(--text-xs); font-weight: 600; color: var(--muted); cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast); }
+  .up-seg button + button { border-left: 1px solid var(--border); }
+  .up-seg button.on { background: var(--accent-soft); color: var(--accent); }
+  .up-save { font-size: var(--text-2xs); font-weight: 600; color: var(--green); background: var(--green-soft); border: 1px solid var(--green-line); padding: 2px 9px; border-radius: var(--radius-pill); white-space: nowrap; }
+
+  /* ============================================================
+     VARIANT A — two cards
+     ============================================================ */
+  .up-cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 2px 24px 22px; }
+  .plan {
+    position: relative; display: flex; flex-direction: column; gap: 16px;
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 20px 18px; background: var(--bg);
+  }
+  .plan.pro { border-color: var(--accent-line); background: var(--accent-soft); }
+  .plan-eyebrow { font-size: var(--text-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--muted); }
+  .plan.pro .plan-eyebrow { color: var(--accent); }
+  .plan-rec { position: absolute; top: -10px; right: 16px; font-size: var(--text-2xs); font-weight: 700; letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--accent-contrast); background: var(--accent); padding: 3px 10px; border-radius: var(--radius-pill); }
+  .plan-price { display: flex; align-items: baseline; gap: 5px; }
+  .plan-price .pp-amt { font-size: 2.1rem; font-weight: 700; letter-spacing: var(--tracking-tight); font-variant-numeric: tabular-nums; line-height: 1; }
+  .plan-price .pp-per { font-size: var(--text-sm); color: var(--muted); font-weight: 500; }
+  .plan-sub { font-size: var(--text-2xs); color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.1em; margin-top: 5px; }
+  .plan-line { font-size: var(--text-sm); color: var(--text); line-height: 1.5; text-wrap: pretty; }
+  .plan .btn { width: 100%; justify-content: center; }
+  .plan-feats { list-style: none; margin: 4px 0 0; padding: 14px 0 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 11px; }
+  .plan.pro .plan-feats { border-top-color: var(--accent-line); }
+  .feat { display: flex; gap: 10px; align-items: flex-start; }
+  .feat-check { flex-shrink: 0; width: 17px; height: 17px; margin-top: 1px; color: var(--muted); }
+  .feat-check svg { display: block; width: 100%; height: 100%; }
+  .feat.key .feat-check { color: var(--accent); }
+  .feat-body .feat-t { font-size: var(--text-sm); font-weight: 600; line-height: 1.35; }
+  .feat-body .feat-d { font-size: var(--text-2xs); color: var(--muted); line-height: 1.45; margin-top: 2px; text-wrap: pretty; }
+  .feat-more { font-size: var(--text-xs); color: var(--muted); font-weight: 600; }
+
+  /* ============================================================
+     VARIANT B — comparison table
+     ============================================================ */
+  .up-table-wrap { padding: 2px 24px 8px; }
+  .cmp { width: 100%; border-collapse: collapse; }
+  .cmp th, .cmp td { text-align: left; }
+  .cmp thead th { padding: 0 0 16px; vertical-align: bottom; }
+  .cmp .col-plan { width: 96px; text-align: center; vertical-align: top; }
+  .cmp-plan-name { font-size: var(--text-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--muted); }
+  .cmp .col-pro .cmp-plan-name { color: var(--accent); }
+  .cmp-plan-price { font-size: 1.35rem; font-weight: 700; letter-spacing: var(--tracking-tight); font-variant-numeric: tabular-nums; margin-top: 5px; line-height: 1; }
+  .cmp-plan-per { font-size: var(--text-2xs); color: var(--muted); font-weight: 500; margin-top: 3px; min-height: 1em; }
+  .cmp .col-pro { background: var(--accent-soft); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+  .cmp-group td { font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--muted); font-weight: 700; padding: 16px 0 8px; }
+  .cmp-feat td { padding: 9px 0; border-top: 1px solid var(--border); font-size: var(--text-sm); vertical-align: top; }
+  .cmp-feat .cf-name { font-weight: 600; }
+  .cmp-feat .cf-d { font-size: var(--text-2xs); color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .cmp-feat .col-plan { text-align: center; vertical-align: middle; }
+  .cmp .col-pro.cell { background: var(--accent-soft); }
+  .cmp-mark { display: inline-flex; align-items: center; justify-content: center; }
+  .cmp-mark svg { width: 18px; height: 18px; }
+  .cmp-mark.yes { color: var(--accent); }
+  .cmp-mark.yes.mute { color: var(--muted); }
+  .cmp-mark.no { color: var(--border); font-size: 16px; }
+  .up-table-foot { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 24px 22px; }
+  .up-table-foot .col-spacer { display: none; }
+
+  .up-foot-note { padding: 0 24px 20px; font-size: var(--text-2xs); color: var(--muted); text-align: center; }
+
+  /* keep tweak panel readable in dark */
+  [data-theme="dark"] #__tweaks_root { color-scheme: dark; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + DS bundle (plain JS) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/_ds_bundle.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Babel components -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="upgrade.jsx"></script>
+</body>
+</html>

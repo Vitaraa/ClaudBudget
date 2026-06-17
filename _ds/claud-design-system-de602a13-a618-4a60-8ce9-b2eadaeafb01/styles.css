@@ -1,0 +1,14 @@
+/* ============================================================================
+   Claud — Design System entry point
+   Consumers link THIS one file. It is an import manifest only — no rules live
+   here. Order: tokens first (so custom properties exist), then base, then the
+   shared component vocabulary.
+   ========================================================================== */
+
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/elevation.css";
+
+@import "./css/base.css";
+@import "./css/components.css";

@@ -1,0 +1,74 @@
+/* ============================================================================
+   Claud — Base / reset
+   Body defaults, the muted/pos/neg utilities, and number rendering. Everything
+   here reads from the design tokens so themes flow through automatically.
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures everywhere money or dates line up. */
+.tnum,
+.txn-date,
+.sub-amt,
+.recent-date {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Text utilities ---- */
+.muted {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.pos {
+  color: var(--green);
+}
+.neg {
+  color: var(--red);
+}
+
+/* ---- Brand wordmark ---- */
+.brand {
+  font-size: var(--text-h2);
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-logo {
+  width: 30px;
+  height: 30px;
+  display: block;
+  flex-shrink: 0;
+}
+.brand-center {
+  justify-content: center;
+}
+
+/* ---- Focus ---- */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
