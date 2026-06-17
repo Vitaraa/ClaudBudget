@@ -448,13 +448,22 @@ const FS_BLANK = (kind) => ({
 function FsModal({ draft, isNew, onField, onSave, onDelete, onClose }) {
   const { Button } = FS;
   const k = draft.kind;
-  const num = (field) => (e) => onField(field, e.target.value === "" ? "" : Number(e.target.value));
-  const Field = ({ label, field, full, step }) => (
-    <label className={"fs-field" + (full ? " full" : "")}>
-      <span>{label}</span>
-      <input type="number" step={step || "1"} value={draft[field] ?? ""} onChange={num(field)} />
-    </label>
-  );
+  const num = (name) => (e) => onField(name, e.target.value === "" ? "" : Number(e.target.value));
+  // `field` is a plain render helper, invoked as {field(...)} — deliberately NOT
+  // a component used as <Field/>. A component defined inside render gets a brand
+  // new identity on every render, so React unmounts and remounts its <input> on
+  // each keystroke; that dropped focus after a single character and made the
+  // year (and every numeric field) impossible to type. Inlining the elements via
+  // a function call keeps the same <input> mounted across re-renders.
+  const field = (label, name, opts) => {
+    opts = opts || {};
+    return (
+      <label key={name} className={"fs-field" + (opts.full ? " full" : "")}>
+        <span>{label}</span>
+        <input type="number" step={opts.step || "1"} value={draft[name] ?? ""} onChange={num(name)} />
+      </label>
+    );
+  };
 
   return (
     <div className="fs-overlay" onMouseDown={onClose}>
@@ -467,38 +476,38 @@ function FsModal({ draft, isNew, onField, onSave, onDelete, onClose }) {
           <label className="fs-field full"><span>Name</span><input value={draft.name || ""} onChange={(e) => onField("name", e.target.value)} /></label>
 
           {k === "retirement" && <React.Fragment>
-            <Field label="Retirement year" field="year" />
-            <Field label="Real return % / yr" field="ret" step="0.1" />
+            {field("Retirement year", "year")}
+            {field("Real return % / yr", "ret", { step: "0.1" })}
           </React.Fragment>}
 
           {k === "house" && <React.Fragment>
-            <Field label="Home price" field="amount" />
-            <Field label="Purchase year" field="year" />
-            <Field label="Down payment" field="down" />
-            <Field label="Mortgage rate %" field="rate" step="0.1" />
-            <Field label="Term (years)" field="term" />
+            {field("Home price", "amount")}
+            {field("Purchase year", "year")}
+            {field("Down payment", "down")}
+            {field("Mortgage rate %", "rate", { step: "0.1" })}
+            {field("Term (years)", "term")}
           </React.Fragment>}
 
           {k === "job" && <React.Fragment>
-            <Field label="Take-home / yr" field="amount" />
-            <Field label="Start year" field="year" />
+            {field("Take-home / yr", "amount")}
+            {field("Start year", "year")}
           </React.Fragment>}
 
           {k === "kids" && <React.Fragment>
-            <Field label="Cost / yr" field="amount" />
-            <Field label="Start year" field="year" />
-            <Field label="Support until" field="end" />
+            {field("Cost / yr", "amount")}
+            {field("Start year", "year")}
+            {field("Support until", "end")}
           </React.Fragment>}
 
           {k === "pension" && <React.Fragment>
-            <Field label="Income / yr" field="amount" />
-            <Field label="Starts in year" field="year" />
+            {field("Income / yr", "amount")}
+            {field("Starts in year", "year")}
           </React.Fragment>}
 
           {(k === "income" || k === "expense") && <React.Fragment>
-            <Field label="Amount / yr" field="amount" />
-            <Field label="Start year" field="year" />
-            <Field label="End year" field="end" />
+            {field("Amount / yr", "amount")}
+            {field("Start year", "year")}
+            {field("End year", "end")}
           </React.Fragment>}
         </div>
         <div className="fs-modal-foot">
