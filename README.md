@@ -40,6 +40,7 @@ server/                 Node backend (no external dependencies)
   lib/auth.js           password hashing (scrypt) + JWT (HMAC-SHA256)
   lib/compute.js        derived figures: net worth, cash flow, budget spent, insights
   lib/http.js           tiny router + static file serving
+  lib/quotes.js         live market quotes + history (Yahoo feed; provider-swappable)
 public/                 the React frontend (Babel-in-browser), served by the server
   boot.js               API client + auth guard + instant theme
   store.js              hydrates server data into the app
@@ -58,6 +59,15 @@ untouched at the project root for reference. The **running app is served from `p
 - **Free vs Pro:** the Upgrade page / in-app modal flips your account to Pro. Pro unlocks
   **Foresight** and **Insights** (there is no real payment step — see NOTES.md).
 
+## Live market data
+
+Investment holdings are priced from a live quotes feed — **Yahoo Finance by default** (keyless;
+covers US + Canadian `.TO` + international symbols). Prices, day change, portfolio value, the
+detail-page price chart and key stats, and the portfolio-vs-S&P 500 benchmark all update from
+real data, with a 60s auto-refresh on the Investments tab. If the feed is unreachable the app
+falls back to your last entered prices, so nothing breaks. To route through an official provider
+instead, set `FINNHUB_API_KEY` or `TWELVEDATA_API_KEY` (see NOTES.md and `server/lib/quotes.js`).
+
 ## Reset
 
 Stop the server and delete the `data/` folder (or just `data/claud.db*`) to wipe all accounts
@@ -71,4 +81,5 @@ All under `/api`, JSON, `Authorization: Bearer <token>` except register/login.
 `GET /bootstrap` (everything for the signed-in user in one call),
 `accounts`, `transactions` (+`/bulk`, `/import`), `rules`, `budget` (+`/groups`,`/categories`,`/cover`),
 `recurring`, `goals` (+`/:id/funds`), `holdings`, `foresight` (+`/plans`,`/overrides`),
-`settings`, and computed `GET /dashboard|insights|cashflow|networth`.
+`settings`, computed `GET /dashboard|insights|cashflow|networth`,
+and live market data `GET /quotes`, `GET /quotes/history`, `GET /portfolio/series`.

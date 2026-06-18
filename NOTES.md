@@ -31,10 +31,13 @@ surprise.
    transactions it produces are real and persist. Note: receipt scanning is described as a Pro
    feature in the marketing copy, but I did **not** hard-gate the import UI behind Pro — only
    Foresight and Insights are gated. Tell me if you want receipt-scan gated too.
-4. **Investment prices** — holdings' **value, cost basis, return, and contribution to net worth
-   are real** (computed from the shares/price/cost you enter). The intraday "live quote" numbers
-   and the portfolio-vs-S&P 500 benchmark line on the detail page are **deterministic
-   simulations** (no market-data feed). A real build would plug in a quotes API.
+4. **Investment prices — now live.** Holdings are priced from a real quotes feed
+   (**Yahoo Finance** by default — keyless; `server/lib/quotes.js`). Live price + day change drive
+   value, return, portfolio value and the KPIs; the detail-page price chart and key stats
+   (open, day/52-week range, volume) and the portfolio-vs-S&P 500 benchmark are built from real
+   market data. Everything degrades gracefully — if the feed is unreachable the app falls back to
+   your entered prices and the prior seeded charts, so a hiccup never breaks the page. Set
+   `FINNHUB_API_KEY` or `TWELVEDATA_API_KEY` to route through an official provider instead.
 5. **Goal auto-transfer** — the auto-transfer toggle is stored and feeds projections, but there
    is **no scheduler** moving money every month. "Add funds" *does* move money immediately: it
    debits the chosen account and logs a contribution.
@@ -71,3 +74,24 @@ surprise.
   signed JWTs, per-user authorization on every route, and a path-traversal guard on static files.
 - Set a fixed `CLAUD_SECRET` env var in production to keep sessions valid across restarts on
   multiple machines (otherwise a random secret is generated and saved to `data/.secret`).
+
+## Security posture & email-auth roadmap (recap — full detail in `EMAIL_AUTH_PLAN.md`)
+
+**What encryption we do for user data today:** passwords are scrypt-**hashed** (one-way, not
+decryptable); sessions are HMAC-SHA256 **signed** JWTs (tamper-evident, but the payload is readable
+base64 — signing isn't encryption); **all other user data** (accounts, balances, transactions,
+holdings, email) is stored **plaintext** in `data/claud.db` — no field-level or at-rest DB
+encryption; and the Node server speaks **plain HTTP** (TLS only if a proxy like Cloudflare
+terminates it). Bottom line: credentials are protected and sessions are tamper-evident, but the
+financial data itself is **not encrypted at rest or, by itself, in transit**. Hardening order:
+HTTPS in front first, then at-rest (AES-GCM on sensitive columns, or SQLCipher), then move the
+signing secret to a secrets store.
+
+**Email-auth plan — 4 flows** (chosen scope; full plan + endpoints/schema in `EMAIL_AUTH_PLAN.md`):
+email verification on signup, password reset, passwordless magic-link login, and finishing the
+Google OAuth stub. The existing email/password core (scrypt + JWT, per-user scoping) is already
+real — only email *delivery* + these flows are missing. Build foundation first: an email sender
+(`server/lib/mailer.js`, a transactional-email HTTP API via `fetch`, keep zero-dep), a single-use
+**hashed** `auth_tokens` table, and `users` columns `email_verified` / `token_version` /
+`google_sub`. Suggested order: foundation → password reset → verification → magic-link → Google
+OAuth last.

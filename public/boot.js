@@ -71,6 +71,9 @@
     login: function (email, password) { return request('POST', '/api/auth/login', { email: email, password: password }); },
     me: function () { return request('GET', '/api/auth/me'); },
     setPlan: function (plan) { return request('POST', '/api/auth/plan', { plan: plan }); },
+    quotes: function (symbols) { return request('GET', '/api/quotes' + (symbols && symbols.length ? ('?symbols=' + encodeURIComponent(symbols.join(','))) : '')); },
+    quotesHistory: function (symbol, period) { return request('GET', '/api/quotes/history?symbol=' + encodeURIComponent(symbol) + '&period=' + encodeURIComponent(period || '1Y')); },
+    portfolioSeries: function (period) { return request('GET', '/api/portfolio/series?period=' + encodeURIComponent(period || '1Y')); },
     logout: function () { setToken(null); location.assign('/'); }
   };
 

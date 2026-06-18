@@ -223,6 +223,59 @@ const INV_DPERIODS = [
 /* ============================================================
    COMPARE CHART — portfolio vs S&P 500 (normalized % return)
    ============================================================ */
+/* ============================================================
+   LIVE MARKET DATA HOOKS — pull real quotes/candles from the
+   server's /api/quotes* endpoints. Each degrades to null so the
+   page falls back to entered prices + the seeded charts.
+   ============================================================ */
+// Real candle history for a ticker+period; null until/unless it loads.
+function useLiveHistory(ticker, period, skip) {
+  const [hist, setHist] = ivUseState(null);
+  React.useEffect(() => {
+    if (skip || !ticker || !window.ClaudAPI || !window.ClaudAPI.quotesHistory) { setHist(null); return; }
+    let alive = true; setHist(null);
+    window.ClaudAPI.quotesHistory(ticker, period)
+      .then((r) => { if (alive) setHist(r && Array.isArray(r.closes) && r.closes.length > 1 ? r.closes : null); })
+      .catch(() => { if (alive) setHist(null); });
+    return () => { alive = false; };
+  }, [ticker, period, skip]);
+  return hist;
+}
+// Real portfolio-vs-benchmark series for the selected period; null if unavailable.
+function usePortfolioSeries(period) {
+  const [data, setData] = ivUseState(null);
+  React.useEffect(() => {
+    if (!window.ClaudAPI || !window.ClaudAPI.portfolioSeries) { setData(null); return; }
+    let alive = true; setData(null);
+    window.ClaudAPI.portfolioSeries(period)
+      .then((r) => {
+        if (!alive) return;
+        setData(r && r.available && Array.isArray(r.portfolio) && Array.isArray(r.benchmark)
+          && r.portfolio.length > 1 && r.benchmark.length > 1 ? r : null);
+      })
+      .catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, [period]);
+  return data;
+}
+// "Live · hh:mm" chip with click-to-refresh; hidden until the first quote load.
+function LiveTag() {
+  const D = window.ClaudData || {};
+  if (!D.quotesAsOf) return null;
+  const t = new Date(D.quotesAsOf);
+  const hh = String(t.getHours()).padStart(2, "0"), mm = String(t.getMinutes()).padStart(2, "0");
+  const refresh = () => { if (window.ClaudStore && window.ClaudStore.refreshQuotes) window.ClaudStore.refreshQuotes(); };
+  return (
+    <button onClick={refresh} title="Refresh quotes"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "none",
+        border: "1px solid var(--border)", borderRadius: "999px", color: "var(--muted)",
+        font: "inherit", fontSize: "var(--text-2xs)", padding: "4px 10px", cursor: "pointer" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "999px", background: "var(--green)", display: "inline-block" }} />
+      Live · {hh}:{mm}
+    </button>
+  );
+}
+
 function InvCompareChart({ levelsA, levelsB, labels, nameA, nameB, colorA, colorB }) {
   const W = 940, H = 250, padL = 46, padR = 16, padT = 18, padB = 26;
   const [hov, setHov] = ivUseState(null);
@@ -387,19 +440,29 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
   // column sort for the holdings table: key null = natural order. dir 1 asc, -1 desc.
   const [sort, setSort] = ivUseState({ key: "weight", dir: -1 });
 
+  const liveSeries = usePortfolioSeries(period);
   const n = INV_PERIODS[period];
-  const sp = INV_SP500.slice(-n);
-  const pf = INV_PORT.slice(-n);
-  const labels = INV_LABELS.slice(-n);
+  const sp = liveSeries ? liveSeries.benchmark : INV_SP500.slice(-n);
+  const pf = liveSeries ? liveSeries.portfolio : INV_PORT.slice(-n);
+  const labels = liveSeries ? liveSeries.labels : INV_LABELS.slice(-n);
   const pfRet = (pf[pf.length - 1] / pf[0] - 1) * 100;
   const spRet = (sp[sp.length - 1] / sp[0] - 1) * 100;
   const gap = pfRet - spRet;
 
+  // Auto-refresh live quotes while the Investments page is open (and once on mount).
+  React.useEffect(() => {
+    if (!window.ClaudStore || !window.ClaudStore.refreshQuotes) return;
+    window.ClaudStore.refreshQuotes();
+    const id = setInterval(() => { window.ClaudStore.refreshQuotes(); }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const totalValue = holdings.reduce((s, h) => s + h.value, 0) || 1;
   const dayDollar = holdings.reduce((s, h) => s + h.value * h.day / 100, 0);
   const dayPct = dayDollar / totalValue * 100;
-  const yrPf = (INV_PORT[INV_PORT.length - 1] / INV_PORT[INV_PORT.length - 13] - 1) * 100;
-  const yrSp = (INV_SP500[INV_SP500.length - 1] / INV_SP500[INV_SP500.length - 13] - 1) * 100;
+  // Return over the selected period — from the live series when available.
+  const yrPf = pfRet;
+  const yrSp = spRet;
   const yrDollar = totalValue - totalValue / (1 + yrPf / 100);
 
   const allocTotals = INV_CLASSES.map((a) => ({
@@ -443,12 +506,12 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className={"kpi-delta " + (dayDollar >= 0 ? "pos" : "neg")}>{dayDollar >= 0 ? "\u2191" : "\u2193"} {invSigned(dayDollar, 0)} ({invPct(dayPct, 2)}) today</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Total return · 1Y</span>
+          <span className="kpi-label">Total return · {period}</span>
           <span className="kpi-val pos">{invPct(yrPf)}</span>
           <span className="kpi-delta pos">{"\u2191"} {invSigned(yrDollar, 0)}</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">S&amp;P 500 · 1Y</span>
+          <span className="kpi-label">S&amp;P 500 · {period}</span>
           <span className="kpi-val">{invPct(yrSp)}</span>
           <span className="kpi-delta" style={{ color: "var(--muted)" }}>benchmark</span>
         </div></Card>
@@ -466,7 +529,8 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
             <span className="widget-eyebrow">Performance vs benchmark</span>
             <div className="cf-hero-title">Your portfolio vs the S&amp;P 500</div>
           </div>
-          <div className="cf-hero-right">
+          <div className="cf-hero-right" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <LiveTag />
             {Segmented && <Segmented options={Object.keys(INV_PERIODS)} value={period} onChange={setPeriod} />}
           </div>
         </div>
@@ -787,6 +851,7 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
   const meta = INV_META[h.ticker] || {};
   const isCash = h.cls === "Cash" || h.kind === "cash";
   const seed = invHash(h.ticker + "|" + h.id);
+  const liveHist = useLiveHistory(h.ticker, period, isCash);
 
   if (isCash) {
     return (
@@ -827,24 +892,31 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
       </React.Fragment>);
   }
 
-  // ---- live-style quote numbers (deterministic from seed) ----
+  // ---- quote numbers: real when a live feed is present, else a deterministic estimate ----
   const rnd = invRng(seed);
-  const prevClose = h.price / (1 + h.day / 100);
-  const open = prevClose * (1 + (rnd() - 0.5) * 0.009);
-  const dayLo = Math.min(h.price, open, prevClose) * (1 - (0.001 + rnd() * 0.006));
-  const dayHi = Math.max(h.price, open, prevClose) * (1 + (0.001 + rnd() * 0.006));
+  const q = h.quote || null;
+  const prevClose = (q && typeof q.prevClose === "number") ? q.prevClose : h.price / (1 + (h.day || 0) / 100);
+  const open = (q && typeof q.open === "number") ? q.open : prevClose * (1 + (rnd() - 0.5) * 0.009);
+  const dayLo = (q && typeof q.dayLow === "number") ? q.dayLow : Math.min(h.price, open, prevClose) * (1 - (0.001 + rnd() * 0.006));
+  const dayHi = (q && typeof q.dayHigh === "number") ? q.dayHigh : Math.max(h.price, open, prevClose) * (1 + (0.001 + rnd() * 0.006));
   const yrStart = h.price / (1 + h.ret / 100);
-  const wkLo = Math.min(h.price, yrStart) * (0.9 + rnd() * 0.05);
-  const wkHi = Math.max(h.price, yrStart) * (1.04 + rnd() * 0.07);
-  const volume = Math.round((2 + rnd() * 55) * 1e6);
+  const wkLo = (q && typeof q.wkLow === "number") ? q.wkLow : Math.min(h.price, yrStart) * (0.9 + rnd() * 0.05);
+  const wkHi = (q && typeof q.wkHigh === "number") ? q.wkHigh : Math.max(h.price, yrStart) * (1.04 + rnd() * 0.07);
+  const volume = (q && typeof q.volume === "number") ? q.volume : Math.round((2 + rnd() * 55) * 1e6);
   const avgVol = Math.round(volume * (0.8 + rnd() * 0.5));
-  const dayDollar = h.value * h.day / 100;
+  const dayDollar = h.value * (h.day || 0) / 100;
 
-  // ---- price series for the selected period ----
+  // ---- price series for the selected period: real candles when available, else seeded ----
   const dp = INV_DPERIODS.find((p) => p.k === period) || INV_DPERIODS[4];
-  const periodRet = dp.intraday ? h.day : h.ret * dp.f;
-  const start = h.price / (1 + periodRet / 100);
-  const series = invGen(start, h.price, dp.pts, h.price * dp.vol, seed + dp.k.charCodeAt(0));
+  let series, start;
+  if (liveHist && liveHist.length > 1) {
+    series = liveHist;
+    start = liveHist[0];
+  } else {
+    const periodRet = dp.intraday ? (h.day || 0) : h.ret * dp.f;
+    start = h.price / (1 + periodRet / 100);
+    series = invGen(start, h.price, dp.pts, h.price * dp.vol, seed + dp.k.charCodeAt(0));
+  }
   const periodUp = h.price >= start;
   const periodChg = h.price - start;
   const periodChgPct = (h.price / start - 1) * 100;

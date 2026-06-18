@@ -18,6 +18,7 @@
     insights: { items: [], months: [] }, sankey: {}, foresightStartNetWorth: 0,
     accounts: [], transactions: [], rules: [], recurring: [], goals: [],
     holdings: [], foresightPlans: [], foresightOverrides: [],
+    quotes: {}, quotesProvider: null, quotesAsOf: 0,
     accountGroups: [], netWorthSeries: [], dashCategories: [],
     budgetGroups: [], recent: [], cashflow: []
   };
@@ -59,7 +60,7 @@
     mut(D.rules, boot.rules);
     mut(D.recurring, boot.recurring);
     mut(D.goals, boot.goals);
-    mut(D.holdings, boot.holdings);
+    mut(D.holdings, (boot.holdings || []).map(function (h) { return Object.assign({ day: 0 }, h); }));
     mut(D.foresightPlans, boot.foresight && boot.foresight.plans);
     mut(D.foresightOverrides, boot.foresight && boot.foresight.overrides);
     mut(D.budgetGroups, boot.budget && boot.budget.groups);
@@ -102,14 +103,57 @@
   }
 
   function emit() { try { window.dispatchEvent(new CustomEvent('claud:data')); } catch (e) {} }
+
+  // ---- live market quotes -------------------------------------------------
+  // Overlay live quotes onto holdings in place (recompute value/return). Never
+  // throws; a missing quote leaves the user's entered price untouched.
+  function applyQuotes(map) {
+    D.quotes = map || {};
+    for (var i = 0; i < D.holdings.length; i++) {
+      var h = D.holdings[i];
+      if (h.kind === 'cash' || !h.ticker) { if (h.day == null) h.day = 0; continue; }
+      var q = D.quotes[String(h.ticker).toUpperCase()];
+      if (q && typeof q.price === 'number' && q.price > 0) {
+        h.price = q.price;
+        h.day = (typeof q.day === 'number') ? q.day : (h.day || 0);
+        h.value = Math.round(h.shares * h.price * 100) / 100;
+        var cost = (h.cost != null ? h.cost : h.price);
+        h.ret = cost > 0 ? Math.round(((h.price / cost) - 1) * 1000) / 10 : 0;
+        h.quote = q; h.live = true;
+      } else if (h.day == null) {
+        h.day = 0;            // no live data yet -> flat, never NaN
+      }
+    }
+  }
+  // Pull live quotes for held tickers, then re-render. Safe offline.
+  function refreshQuotes() {
+    if (!window.ClaudAPI || !window.ClaudAPI.quotes) return Promise.resolve();
+    var syms = [];
+    for (var i = 0; i < D.holdings.length; i++) {
+      var h = D.holdings[i];
+      if (h.ticker && h.kind !== 'cash' && String(h.ticker).toUpperCase() !== 'CASH') syms.push(h.ticker);
+    }
+    if (!syms.length) { applyQuotes({}); return Promise.resolve(); }
+    return window.ClaudAPI.quotes(syms).then(function (r) {
+      applyQuotes(r && r.quotes);
+      D.quotesProvider = r && r.provider;
+      D.quotesAsOf = (r && r.asOf) || Date.now();
+      emit();
+      return r;
+    }).catch(function () { applyQuotes(D.quotes || {}); emit(); });
+  }
+
   function load() {
     return window.ClaudAPI.bootstrap().then(function (boot) {
-      apply(boot); D.ready = true; emit(); return D;
+      apply(boot); D.ready = true; emit();
+      refreshQuotes();   // live prices, non-blocking; emits again when they land
+      return D;
     });
   }
 
   window.ClaudStore = {
     data: D, hydrate: load, refresh: load, get: function () { return D; }, emit: emit,
+    refreshQuotes: refreshQuotes,
     accountNames: function () { return D.accounts.map(function (a) { return a.name; }); },
     accountById: function (id) { return D.accounts.find(function (a) { return a.id === id; }) || null; },
     isPro: function () { return !!(D.user && D.user.plan === 'pro'); }

@@ -7,6 +7,7 @@ const { db, tx } = require('./lib/db');
 const { newId, HttpError } = require('./lib/http');
 const auth = require('./lib/auth');
 const compute = require('./lib/compute');
+const quotes = require('./lib/quotes');
 
 const nowISO = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -538,6 +539,47 @@ function register(router) {
     ctx.json(200, { ok: true });
   }));
 
+  /* -------------------------------------------------- MARKET QUOTES */
+  /* Live market data. Auth-scoped (so the server isn't an open proxy).
+     All three degrade gracefully: a feed outage yields nulls/empties,
+     never a 5xx, and the frontend falls back to the user's entered
+     prices and simulated charts. */
+
+  // Live quotes. ?symbols=AAPL,RY.TO  (defaults to the user's holdings).
+  router.get('/api/quotes', auth.requireAuth(async (req, res, ctx) => {
+    const raw = (ctx.query.get('symbols') || '').trim();
+    let syms = raw
+      ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+      : db.prepare(`SELECT DISTINCT ticker FROM holdings
+                    WHERE user_id = ? AND kind <> 'cash' AND ticker IS NOT NULL AND ticker <> ''`)
+          .all(ctx.user.id).map((r) => r.ticker);
+    syms = syms.filter((s) => s && s.toUpperCase() !== 'CASH').slice(0, 60);
+    let data = {};
+    try { data = await quotes.getQuotes(syms); } catch (e) { console.error('quotes failed:', e); }
+    ctx.json(200, { quotes: data, provider: quotes.providerName(), asOf: Date.now() });
+  }));
+
+  // Single-symbol candle history for the detail-page price chart.
+  router.get('/api/quotes/history', auth.requireAuth(async (req, res, ctx) => {
+    const symbol = str(ctx.query.get('symbol'), 'symbol', { required: true });
+    const period = str(ctx.query.get('period'), 'period') || '1Y';
+    let data = null;
+    try { data = await quotes.getHistory(symbol, period); } catch (e) { console.error('history failed:', e); }
+    ctx.json(200, Object.assign({ symbol, period, timestamps: [], closes: [] }, data || {}));
+  }));
+
+  // Real portfolio-vs-S&P 500 series, weighted from the user's holdings.
+  router.get('/api/portfolio/series', auth.requireAuth(async (req, res, ctx) => {
+    const period = str(ctx.query.get('period'), 'period') || '1Y';
+    const holdings = db.prepare(
+      `SELECT ticker, kind, shares, price FROM holdings WHERE user_id = ?`
+    ).all(ctx.user.id);
+    let data = null;
+    try { data = await quotes.getPortfolioSeries(holdings, period); } catch (e) { console.error('series failed:', e); }
+    if (!data) return ctx.json(200, { period, available: false });
+    ctx.json(200, Object.assign({ period, available: true }, data));
+  }));
+
   /* ------------------------------------------------------ FORESIGHT */
   router.get('/api/foresight', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id;
@@ -608,3 +650,4 @@ function register(router) {
 }
 
 module.exports = { register };
+/* Routes include live market quotes (default provider: Yahoo) — see lib/quotes.js. */
