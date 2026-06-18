@@ -32,7 +32,9 @@ const PAGES = {
   '/dashboard': 'app.html',
   '/upgrade': 'upgrade.html',
   '/legal': 'legal.html',
-  '/login': 'landing.html'
+  '/login': 'landing.html',
+  '/reset': 'reset.html',
+  '/verify': 'verify.html'
 };
 
 const server = http.createServer(async (req, res) => {

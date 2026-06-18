@@ -1787,6 +1787,55 @@ function ProGate({ feature, blurb, onUpgrade }) {
     </div>);
 }
 
+/* Soft email-verification gate: a dismissible banner shown until the signed-in
+   user's email is verified. Lets them keep using the app (no hard wall) while
+   nudging confirmation, with a rate-limited Resend. */
+function VerifyBanner() {
+  const [dismissed, setDismissed] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const user = (window.ClaudData && ClaudData.user) || {};
+  if (dismissed || !user || user.email_verified) return null;
+
+  const resend = () => {
+    if (busy || sent) return;
+    setBusy(true);
+    window.ClaudAPI.resendVerification()
+      .then(function () { setBusy(false); setSent(true); })
+      .catch(function () { setBusy(false); setSent(true); });   // stay generic
+  };
+
+  const wrap = {
+    display: "flex", alignItems: "center", gap: 11,
+    background: "var(--warn-soft)", border: "1px solid var(--warn-line)",
+    color: "var(--text)", borderRadius: "var(--radius-md, 10px)",
+    padding: "11px 14px", fontSize: "var(--text-sm, 0.9rem)", lineHeight: 1.45
+  };
+  const linkBtn = {
+    background: "none", border: "none", color: "var(--accent)", fontFamily: "inherit",
+    fontSize: "inherit", fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline"
+  };
+  const xBtn = {
+    background: "none", border: "none", color: "var(--muted)", fontSize: 18, lineHeight: 1,
+    cursor: "pointer", padding: "0 4px", marginLeft: "auto", flexShrink: 0
+  };
+
+  return (
+    <div className="verify-banner" style={wrap}>
+      <span aria-hidden="true" style={{ color: "var(--warn)", display: "inline-flex", flexShrink: 0 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
+      </span>
+      <span>
+        {sent
+          ? "Verification email sent — check your inbox (and spam)."
+          : (<React.Fragment>Confirm your email{user.email ? (<React.Fragment> — we sent a link to <b>{user.email}</b></React.Fragment>) : null}. </React.Fragment>)}
+        {!sent && <button type="button" style={linkBtn} onClick={resend} disabled={busy}>{busy ? "Sending…" : "Resend"}</button>}
+      </span>
+      <button type="button" aria-label="Dismiss" style={xBtn} onClick={() => setDismissed(true)}>{"×"}</button>
+    </div>
+  );
+}
+
 function App() {
   useClaudData();
   useEffect(() => { if (!ClaudData.ready) ClaudStore.hydrate(); }, []);
@@ -1957,6 +2006,7 @@ function App() {
       {/* ---- Main ---- */}
       <div className="main">
         <div className="main-inner">
+          <VerifyBanner />
           <header className="page-head">
             {openAcct ?
             <div>

@@ -164,7 +164,42 @@ CREATE TABLE IF NOT EXISTS settings (
   user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   data      TEXT NOT NULL DEFAULT '{}'
 );
+
+-- Single-use tokens for email verification, password reset, and (future)
+-- magic-link. Only the SHA-256 hash of the token is stored, never the raw
+-- token, so a DB leak can't be replayed. One row is "consumed" by setting
+-- used_at; expired/used rows are ignored and periodically swept.
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose     TEXT NOT NULL,              -- 'verify' | 'reset' | 'magic'
+  token_hash  TEXT NOT NULL,             -- sha256(rawToken), hex
+  expires_at  TEXT NOT NULL,
+  used_at     TEXT,                       -- set on first use -> single-use
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_authtok_hash ON auth_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_authtok_user ON auth_tokens(user_id, purpose);
 `);
+
+/* ------------------------------------------------------------- migrations */
+/* Idempotent column adds for the email-auth feature. The app is live, so we
+   never drop or rewrite the users table — we additively ALTER it. node:sqlite
+   throws "duplicate column name" if a column already exists, which we swallow,
+   making this safe to run on every boot for both fresh and existing databases.
+   Existing rows get the DEFAULT (email_verified = 0, token_version = 0), and
+   existing sessions stay valid because old JWTs simply carry no token_version
+   claim (treated as 0 — see auth.js). */
+function addColumn(sql) {
+  try { db.exec(sql); }
+  catch (e) {
+    const msg = String((e && e.message) || e);
+    if (!/duplicate column name/i.test(msg)) throw e;   // re-throw anything unexpected
+  }
+}
+addColumn("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
+addColumn("ALTER TABLE users ADD COLUMN token_version  INTEGER NOT NULL DEFAULT 0");
+addColumn("ALTER TABLE users ADD COLUMN google_sub     TEXT");
 
 // Manual transaction helper. node:sqlite's DatabaseSync has no .transaction()
 // (unlike better-sqlite3), so we wrap BEGIN / COMMIT / ROLLBACK ourselves.

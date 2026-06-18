@@ -3,11 +3,15 @@
    Claud API — all routes. Every data route is auth-scoped to the
    token's user; ownership is enforced on every read and write.
    ============================================================ */
+const crypto = require('node:crypto');
 const { db, tx } = require('./lib/db');
 const { newId, HttpError } = require('./lib/http');
 const auth = require('./lib/auth');
 const compute = require('./lib/compute');
 const quotes = require('./lib/quotes');
+const mailer = require('./lib/mailer');
+const ratelimit = require('./lib/ratelimit');
+const google = require('./lib/google');
 
 const nowISO = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -123,6 +127,17 @@ function applyRules(uid, name) {
   return null;
 }
 
+/* ----------------------------------------------------- email verification */
+/* Issue a 24h 'verify' token and email the confirmation link. Best-effort:
+   returns the sendEmail promise so callers can .catch without blocking the
+   response. */
+function sendVerificationEmail(user) {
+  const raw = auth.issueToken(user.id, 'verify', 60 * 60 * 24);
+  const href = mailer.link('/verify', { token: raw });
+  const tmpl = mailer.templates.verify({ name: user.name, href });
+  return mailer.sendEmail({ to: user.email, subject: tmpl.subject, html: tmpl.html, text: tmpl.text });
+}
+
 /* =====================================================================
    REGISTER ROUTES
    ===================================================================== */
@@ -144,7 +159,10 @@ function register(router) {
     // New accounts start with the default budget groups/categories.
     try { seedDefaultBudget(info.lastInsertRowid); } catch (e) { console.error('seedDefaultBudget failed:', e); }
     const user = auth.getUserById(info.lastInsertRowid);
-    ctx.json(200, { token: auth.makeToken(user.id), user: auth.publicUser(user) });
+    // Fire the verification email (non-blocking) — registration still returns a
+    // session immediately, so the user lands in the app (soft gate via banner).
+    sendVerificationEmail(user).catch((e) => console.error('verification email failed:', e));
+    ctx.json(200, { token: auth.makeToken(user.id, user.token_version), user: auth.publicUser(user) });
   });
 
   router.post('/api/auth/login', async (req, res, ctx) => {
@@ -153,7 +171,7 @@ function register(router) {
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!user || !auth.verifyPassword(password, user.pw_salt, user.pw_hash))
       throw new HttpError(401, 'Email or password is incorrect');
-    ctx.json(200, { token: auth.makeToken(user.id), user: auth.publicUser(user) });
+    ctx.json(200, { token: auth.makeToken(user.id, user.token_version), user: auth.publicUser(user) });
   });
 
   router.get('/api/auth/me', auth.requireAuth(async (req, res, ctx) => {
@@ -172,6 +190,119 @@ function register(router) {
     db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, ctx.user.id);
     ctx.json(200, { user: auth.publicUser(auth.getUserById(ctx.user.id)) });
   }));
+
+  /* --------------------------------------------- EMAIL VERIFICATION */
+  // Confirm an email address from the link in the verification email. Public
+  // (the link is the credential); idempotent-ish via single-use token.
+  router.post('/api/auth/verify', async (req, res, ctx) => {
+    const token = str(ctx.body.token, 'token', { required: true });
+    const userId = auth.consumeToken(token, 'verify');     // throws 400 if bad/expired/used
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(userId);
+    auth.invalidateTokens(userId, 'verify');               // burn any sibling links
+    ctx.json(200, { ok: true });
+  });
+
+  // Re-send the verification email to the signed-in user. Rate-limited.
+  router.post('/api/auth/resend-verification', auth.requireAuth(async (req, res, ctx) => {
+    const user = ctx.user;
+    if (user.email_verified) return ctx.json(200, { ok: true, message: 'Your email is already verified.' });
+    const ip = ratelimit.clientIp(req);
+    if (!ratelimit.allow('resend:ip:' + ip, 10, 60 * 60 * 1000) ||
+        !ratelimit.allow('resend:uid:' + user.id, 3, 60 * 60 * 1000))
+      throw new HttpError(429, 'Too many requests — please try again in a bit');
+    auth.invalidateTokens(user.id, 'verify');
+    sendVerificationEmail(user).catch((e) => console.error('verification email failed:', e));
+    ctx.json(200, { ok: true, message: 'Verification email sent.' });
+  }));
+
+  /* ------------------------------------------------- PASSWORD RESET */
+  // Request a reset link. ALWAYS returns a generic 200 (no account
+  // enumeration). Rate-limited per IP and per email.
+  router.post('/api/auth/forgot', async (req, res, ctx) => {
+    const email = (str(ctx.body.email, 'Email', { required: true }) || '').toLowerCase();
+    const ip = ratelimit.clientIp(req);
+    if (!ratelimit.allow('forgot:ip:' + ip, 10, 60 * 60 * 1000) ||
+        !ratelimit.allow('forgot:em:' + email, 5, 60 * 60 * 1000))
+      throw new HttpError(429, 'Too many requests — please try again later');
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (user) {
+      const raw = auth.issueToken(user.id, 'reset', 60 * 60);   // 1h
+      const href = mailer.link('/reset', { token: raw });
+      const tmpl = mailer.templates.reset({ name: user.name, href });
+      mailer.sendEmail({ to: user.email, subject: tmpl.subject, html: tmpl.html, text: tmpl.text })
+        .catch((e) => console.error('reset email failed:', e));
+    }
+    ctx.json(200, { ok: true, message: 'If that email has an account, a reset link is on its way.' });
+  });
+
+  // Complete a reset: consume the token, set the new password, and bump
+  // token_version so every other existing session is signed out.
+  router.post('/api/auth/reset', async (req, res, ctx) => {
+    const token = str(ctx.body.token, 'token', { required: true });
+    const password = String(ctx.body.password || '');
+    if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters');
+    const userId = auth.consumeToken(token, 'reset');      // throws 400 if bad/expired/used
+    const { salt, hash } = auth.hashPassword(password);
+    tx(() => {
+      db.prepare('UPDATE users SET pw_salt = ?, pw_hash = ?, email_verified = 1 WHERE id = ?').run(salt, hash, userId);
+      auth.bumpTokenVersion(userId);                       // invalidate all sessions
+      auth.invalidateTokens(userId, 'reset');              // burn sibling reset links
+    });
+    ctx.json(200, { ok: true, message: 'Your password has been reset. Please sign in.' });
+  });
+
+  /* ---------------------------------------------------- GOOGLE OAUTH */
+  // Step 1 — redirect to Google's consent screen (with CSRF state).
+  router.get('/api/auth/google/start', async (req, res, ctx) => {
+    if (!google.configured()) {
+      res.writeHead(302, { Location: '/login#autherr=' + encodeURIComponent('Google sign-in isn’t configured yet.') });
+      return res.end();
+    }
+    res.writeHead(302, { Location: google.authUrl(google.issueState()) });
+    res.end();
+  });
+
+  // Step 2 — Google redirects back here with ?code & ?state. Validate, map to a
+  // user, mint our own session JWT, then hand it to the frontend via the URL
+  // fragment (#token=…) so it never hits the server logs.
+  router.get('/api/auth/google/callback', async (req, res, ctx) => {
+    const fail = (msg) => { res.writeHead(302, { Location: '/login#autherr=' + encodeURIComponent(msg) }); res.end(); };
+    try {
+      if (!google.configured()) return fail('Google sign-in isn’t configured yet.');
+      if (ctx.query.get('error')) return fail('Google sign-in was cancelled.');
+      const code = ctx.query.get('code');
+      const state = ctx.query.get('state');
+      if (!code || !google.checkState(state)) return fail('Google sign-in failed — please try again.');
+
+      const profile = await google.profileFromCode(code);
+      if (!profile.email || !profile.emailVerified) return fail('Your Google account email could not be verified.');
+
+      // Map: by google_sub, else link a matching email, else create a new user.
+      let user = db.prepare('SELECT * FROM users WHERE google_sub = ?').get(profile.sub);
+      if (!user) {
+        const byEmail = db.prepare('SELECT * FROM users WHERE email = ?').get(profile.email);
+        if (byEmail) {
+          db.prepare('UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?').run(profile.sub, byEmail.id);
+          user = auth.getUserById(byEmail.id);
+        } else {
+          // New Google user: store an unguessable random password so the NOT NULL
+          // columns hold; they can set a real one later via password reset.
+          const { salt, hash } = auth.hashPassword(crypto.randomBytes(24).toString('base64url'));
+          const info = db.prepare(
+            'INSERT INTO users (email, name, pw_salt, pw_hash, plan, created_at, email_verified, google_sub) VALUES (?,?,?,?,?,?,?,?)'
+          ).run(profile.email, profile.name || null, salt, hash, 'free', nowISO(), 1, profile.sub);
+          db.prepare('INSERT INTO settings (user_id, data) VALUES (?, ?)').run(info.lastInsertRowid, '{}');
+          try { seedDefaultBudget(info.lastInsertRowid); } catch (e) { console.error('seedDefaultBudget failed:', e); }
+          user = auth.getUserById(info.lastInsertRowid);
+        }
+      }
+      res.writeHead(302, { Location: '/login#token=' + encodeURIComponent(auth.makeToken(user.id, user.token_version)) });
+      res.end();
+    } catch (e) {
+      console.error('google callback failed:', e);
+      fail('Google sign-in failed — please try again.');
+    }
+  });
 
   /* ------------------------------------------------------- BOOTSTRAP */
   router.get('/api/bootstrap', auth.requireAuth(async (req, res, ctx) => {

@@ -29,6 +29,27 @@
   function getToken() { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
   function setToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
 
+  /* ---- OAuth return capture ----
+     Google sign-in finishes by redirecting to /login#token=<jwt> (or
+     #autherr=<msg>). Read it off the URL fragment, stash it, and clean the
+     address bar so the token never lingers in history. Runs immediately, before
+     the page's auth guard. */
+  (function captureHashAuth() {
+    try {
+      if (!location.hash || location.hash.length < 2) return;
+      var params = new URLSearchParams(location.hash.slice(1));
+      var token = params.get('token');
+      var autherr = params.get('autherr');
+      if (!token && !autherr) return;
+      var clean = function () {
+        try { history.replaceState(null, '', location.pathname + location.search); }
+        catch (e) { location.hash = ''; }
+      };
+      if (token) { setToken(token); clean(); location.replace('/app'); return; }
+      if (autherr) { try { sessionStorage.setItem('claud:autherr', autherr); } catch (e) {} clean(); }
+    } catch (e) {}
+  })();
+
   /* ---- fetch client ---- */
   function request(method, path, body) {
     var headers = { 'Content-Type': 'application/json' };
@@ -69,6 +90,13 @@
     bootstrap: function () { return request('GET', '/api/bootstrap'); },
     register: function (email, password, name) { return request('POST', '/api/auth/register', { email: email, password: password, name: name }); },
     login: function (email, password) { return request('POST', '/api/auth/login', { email: email, password: password }); },
+    forgot: function (email) { return request('POST', '/api/auth/forgot', { email: email }); },
+    reset: function (token, password) { return request('POST', '/api/auth/reset', { token: token, password: password }); },
+    verifyEmail: function (token) { return request('POST', '/api/auth/verify', { token: token }); },
+    resendVerification: function () { return request('POST', '/api/auth/resend-verification', {}); },
+    googleStartUrl: function () { return '/api/auth/google/start'; },
+    // One-shot read of any OAuth error stashed by captureHashAuth (above).
+    consumeAuthError: function () { try { var e = sessionStorage.getItem('claud:autherr'); if (e) sessionStorage.removeItem('claud:autherr'); return e; } catch (x) { return null; } },
     me: function () { return request('GET', '/api/auth/me'); },
     setPlan: function (plan) { return request('POST', '/api/auth/plan', { plan: plan }); },
     quotes: function (symbols) { return request('GET', '/api/quotes' + (symbols && symbols.length ? ('?symbols=' + encodeURIComponent(symbols.join(','))) : '')); },

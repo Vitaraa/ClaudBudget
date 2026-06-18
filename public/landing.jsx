@@ -190,7 +190,7 @@ function GoogleG() {
 
 /* ------------------------------------------------------------- login panel */
 function AuthPanel({ headline }) {
-  const [view, setView] = useState("login"); // login | register
+  const [view, setView] = useState("login"); // login | register | forgot
   const [showPw, setShowPw] = useState(false);
   const [vals, setVals] = useState({ name: "", email: "", pw: "" });
   const [errs, setErrs] = useState({});
@@ -198,27 +198,77 @@ function AuthPanel({ headline }) {
   const [apiErr, setApiErr] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // Surface any OAuth error handed back via the URL fragment (see boot.js).
+  useEffect(() => {
+    const e = window.ClaudAPI && window.ClaudAPI.consumeAuthError && window.ClaudAPI.consumeAuthError();
+    if (e) setApiErr(e);
+  }, []);
+
   const set = (k) => (e) => { setVals(v => ({ ...v, [k]: e.target.value })); setErrs(er => ({ ...er, [k]: null })); setDone(null); setApiErr(null); };
   const isReg = view === "register";
+  const isForgot = view === "forgot";
+  const go = (v) => { setView(v); setErrs({}); setDone(null); setApiErr(null); setBusy(false); };
+  const startGoogle = () => { setApiErr(null); window.location.assign(window.ClaudAPI.googleStartUrl()); };
 
   const submit = (e) => {
     e.preventDefault();
     const er = {};
     if (isReg && !vals.name.trim()) er.name = "Enter your name.";
     if (!/^\S+@\S+\.\S+$/.test(vals.email)) er.email = "Enter a valid email.";
-    if (vals.pw.length < 8) er.pw = "At least 8 characters.";
+    if (!isForgot && vals.pw.length < 8) er.pw = "At least 8 characters.";
     setErrs(er);
-    if (Object.keys(er).length === 0) {
-      setBusy(true); setApiErr(null);
-      setDone(isReg ? "Creating your account…" : "Signing you in…");
-      const req = isReg
-        ? window.ClaudAPI.register(vals.email, vals.pw, vals.name)
-        : window.ClaudAPI.login(vals.email, vals.pw);
-      req.then((res) => { window.ClaudAPI.setToken(res.token); window.location.assign("/app"); })
+    if (Object.keys(er).length) return;
+
+    setBusy(true); setApiErr(null);
+
+    // Forgot password — always a generic confirmation (no account enumeration).
+    if (isForgot) {
+      setDone("Sending reset link…");
+      window.ClaudAPI.forgot(vals.email)
+        .then((res) => { setBusy(false); setDone((res && res.message) || "If that email has an account, a reset link is on its way."); })
         .catch((err) => { setBusy(false); setDone(null); setApiErr(err && err.message ? err.message : "Something went wrong. Please try again."); });
+      return;
     }
+
+    setDone(isReg ? "Creating your account…" : "Signing you in…");
+    const req = isReg
+      ? window.ClaudAPI.register(vals.email, vals.pw, vals.name)
+      : window.ClaudAPI.login(vals.email, vals.pw);
+    req.then((res) => { window.ClaudAPI.setToken(res.token); window.location.assign("/app"); })
+      .catch((err) => { setBusy(false); setDone(null); setApiErr(err && err.message ? err.message : "Something went wrong. Please try again."); });
   };
 
+  /* ---- Forgot-password view ---- */
+  if (isForgot) {
+    return (
+      <div className="auth">
+        <div className="auth-head">
+          <h2>Reset your password</h2>
+          <p>Enter your account email and we'll send you a link to set a new password.</p>
+        </div>
+
+        <form className="form" onSubmit={submit} noValidate>
+          <div className="field">
+            <label htmlFor="email">Email</label>
+            <input id="email" type="email" autoComplete="email" placeholder="you@email.com"
+                   className={errs.email ? "invalid" : ""} value={vals.email} onChange={set("email")} />
+            {errs.email && <span className="field-err">{errs.email}</span>}
+          </div>
+          <Button variant="primary" type="submit" disabled={busy}>{busy ? "Sending…" : "Send reset link"}</Button>
+        </form>
+
+        {done && <div className="status good toast">{done}</div>}
+        {apiErr && <div className="status bad toast" style={{ color: "var(--red)" }}>{apiErr}</div>}
+
+        <div className="auth-foot">
+          Remembered it?{" "}
+          <button type="button" className="link" onClick={() => go("login")}>Back to sign in</button>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- Login / register view ---- */
   return (
     <div className="auth">
       <div className="auth-head">
@@ -226,7 +276,7 @@ function AuthPanel({ headline }) {
         <p>{isReg ? "Start tracking in a couple of minutes." : "Sign in to pick up where you left off."}</p>
       </div>
 
-      <button type="button" className="gbtn" onClick={() => setApiErr("Google sign-in isn\u2019t set up in this local build \u2014 please use email and password.")}>
+      <button type="button" className="gbtn" onClick={startGoogle}>
         <GoogleG /> Continue with Google
       </button>
 
@@ -252,7 +302,7 @@ function AuthPanel({ headline }) {
         <div className="field">
           <div className="field-row">
             <label htmlFor="pw">Password</label>
-            {!isReg && <button type="button" className="link sm" onClick={(e) => e.preventDefault()}>Forgot?</button>}
+            {!isReg && <button type="button" className="link sm" onClick={() => go("forgot")}>Forgot?</button>}
           </div>
           <div className="pw-wrap">
             <input id="pw" type={showPw ? "text" : "password"} autoComplete={isReg ? "new-password" : "current-password"}
@@ -271,7 +321,7 @@ function AuthPanel({ headline }) {
 
       <div className="auth-foot">
         {isReg ? "Already have an account? " : "New to Claud? "}
-        <button type="button" className="link" onClick={() => { setView(isReg ? "login" : "register"); setErrs({}); setDone(null); }}>
+        <button type="button" className="link" onClick={() => go(isReg ? "login" : "register")}>
           {isReg ? "Sign in" : "Create one"}
         </button>
       </div>

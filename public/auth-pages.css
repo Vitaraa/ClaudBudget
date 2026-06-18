@@ -1,0 +1,116 @@
+/* ============================================================
+   Claud — standalone auth pages (reset password, verify email).
+   Self-contained: carries the same warm token re-point as the
+   landing/app shells plus a small centered-card layout, so these
+   pages render correctly without depending on the design-system
+   component classes. Loaded AFTER the DS styles.css so these win.
+   ============================================================ */
+
+:root[data-theme="light"] {
+  --text: #2b2520;
+  --muted: #8c8074;
+  --hover: rgba(120, 86, 48, 0.06);
+
+  --accent: #7e7a3c;            /* olive (brand) */
+  --accent-contrast: #fbf7ec;
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
+
+  --green: #4f9a6a;
+  --green-soft: color-mix(in srgb, var(--green) 15%, transparent);
+  --green-line: color-mix(in srgb, var(--green) 40%, transparent);
+  --red: #cb3a52;
+  --red-soft: color-mix(in srgb, var(--red) 12%, transparent);
+  --red-line: color-mix(in srgb, var(--red) 40%, transparent);
+
+  --bg: #ece3d4; --sidebar: #f7f0e4; --card: #fbf5ec; --input-bg: #e8ddca; --border: #ddcfb8;
+}
+:root[data-theme="light"][data-surface="sand"]  { --bg: #f3ece1; --card: #fffbf5; --input-bg: #f0e7d9; --border: #e7dbc8; }
+:root[data-theme="light"][data-surface="cream"] { --bg: #f8f3ea; --card: #ffffff; --input-bg: #f3ecdf; --border: #ece2d2; }
+:root[data-theme="light"][data-surface="linen"] { --bg: #ece3d4; --card: #fbf5ec; --input-bg: #e8ddca; --border: #ddcfb8; }
+
+:root[data-theme="dark"] {
+  --bg: #161513; --sidebar: #1c1b18; --card: #201e1b; --input-bg: #272420; --border: #322f2a;
+  --hover: rgba(255, 244, 232, 0.045);
+  --text: #ece6dc; --muted: #a39785;
+  --accent: #9b9550; --accent-contrast: #1a1808;
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+  --green: #54bd86; --green-soft: color-mix(in srgb, var(--green) 16%, transparent); --green-line: color-mix(in srgb, var(--green) 42%, transparent);
+  --red: #e85f74; --red-soft: color-mix(in srgb, var(--red) 16%, transparent); --red-line: color-mix(in srgb, var(--red) 44%, transparent);
+  color-scheme: dark;
+}
+
+html { background: var(--bg); }
+body {
+  margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box;
+}
+
+.authwrap { width: 100%; max-width: 416px; }
+.brandrow { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 22px; }
+.brandrow .mark { width: 34px; height: 34px; display: block; }
+.brandrow .wordmark { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; }
+.brandrow .wordmark .wd-accent { color: var(--accent); }
+
+.authcard {
+  background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+  padding: 30px 30px 26px; box-shadow: 0 12px 30px rgba(74, 48, 24, 0.10);
+}
+
+.auth-head { margin-bottom: 20px; }
+.auth-head h1 { margin: 0 0 7px; font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+.auth-head p { margin: 0; font-size: 0.95rem; color: var(--muted); line-height: 1.5; }
+
+.form { display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 0.8rem; font-weight: 600; color: var(--text); }
+.field input {
+  width: 100%; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); font-family: inherit; font-size: 0.95rem; padding: 11px 12px;
+  transition: border-color 0.15s;
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+.field input.invalid { border-color: var(--red-line); }
+.field-err { font-size: 0.72rem; color: var(--red); font-weight: 500; }
+
+.pw-wrap { position: relative; display: flex; }
+.pw-wrap input { padding-right: 64px; }
+.pw-toggle {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--muted); font-family: inherit;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.pw-toggle:hover { color: var(--text); background: var(--hover); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+  background: var(--accent); color: var(--accent-contrast); border: none; border-radius: 10px;
+  font-family: inherit; font-size: 0.95rem; font-weight: 600; padding: 12px 16px; cursor: pointer;
+  text-decoration: none; transition: filter 0.15s, opacity 0.15s; margin-top: 2px;
+}
+.btn:hover { filter: brightness(1.05); }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn.secondary:hover { background: var(--hover); filter: none; }
+
+.status { margin-top: 14px; font-size: 0.9rem; border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
+.status.good { background: var(--green-soft); border: 1px solid var(--green-line); color: var(--text); }
+.status.bad { background: var(--red-soft); border: 1px solid var(--red-line); color: var(--red); }
+.toast { animation: rise 0.35s ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.auth-foot { margin-top: 20px; font-size: 0.9rem; color: var(--muted); text-align: center; }
+.link { background: none; border: none; padding: 0; font: inherit; color: var(--accent); font-weight: 600; cursor: pointer; text-decoration: none; }
+.link:hover { text-decoration: underline; }
+
+/* Centered status icon for the verify page (success / error / spinner). */
+.state-ico { width: 56px; height: 56px; border-radius: 999px; display: flex; align-items: center; justify-content: center; margin: 4px auto 16px; }
+.state-ico svg { width: 28px; height: 28px; }
+.state-ico.good { background: var(--green-soft); border: 1px solid var(--green-line); color: var(--green); }
+.state-ico.bad { background: var(--red-soft); border: 1px solid var(--red-line); color: var(--red); }
+.state-ico.wait { background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--accent); }
+.center { text-align: center; }
+.spin { animation: spin 0.9s linear infinite; transform-origin: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
