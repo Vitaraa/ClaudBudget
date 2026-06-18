@@ -1,0 +1,27 @@
+[Unit]
+Description=Claud Budget — Node + SQLite personal finance dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Account that owns the repo + data/ folder. Change if you use a dedicated user
+# (then chown -R the directory to it).
+User=conrad
+WorkingDirectory=/home/conrad/ClaudBudget
+
+# Absolute node path — verify with `which node`. If you use nvm it'll be under
+# ~/.nvm/versions/node/<ver>/bin/node, not /usr/bin/node.
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/index.js
+
+Environment=PORT=4317
+# Optional: a fixed signing secret kept OUT of git (see one-time setup). The "-"
+# makes the file optional, so the service still starts if it doesn't exist.
+EnvironmentFile=-/etc/claud-budget.env
+
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
