@@ -1,7 +1,8 @@
 'use strict';
 /* ============================================================
    Derived figures — the numbers the dashboard used to hard-code,
-   now computed from the user's real rows.
+   now computed from the user's real rows (read back decrypted via the
+   wrapped db; amount/category aggregations run in JS, not SQL).
      • net worth (current + monthly series)
      • cash flow by month
      • budget spent per category (current cycle)
@@ -109,17 +110,19 @@ function netWorthSeries(uid, n = 24) {
 
 /* -------------------------------------------------------- budget spent */
 // Spent per category name within the current cycle (expenses only).
+// Aggregated in JS (not SQL) because amount/category are encrypted at rest,
+// so SUM()/GROUP BY can't run in the database any more.
 function budgetSpent(uid, cycleStart = 1) {
   const { start, end } = cycleWindow(cycleStart);
-  const rows = db.prepare(
-    `SELECT category AS cat, SUM(-amount) AS spent
-       FROM transactions
-      WHERE user_id = ? AND amount < 0 AND excluded = 0
-        AND date >= ? AND date < ?
-      GROUP BY category`
-  ).all(uid, start, end);
+  const raw = {};
+  for (const t of getTxns(uid)) {
+    if (t.excluded || !(t.amount < 0)) continue;
+    if (!(t.date >= start && t.date < end)) continue;
+    if (!t.category) continue;
+    raw[t.category] = (raw[t.category] || 0) + (-t.amount);
+  }
   const map = {};
-  for (const r of rows) if (r.cat) map[r.cat] = round2(r.spent);
+  for (const k in raw) map[k] = round2(raw[k]);
   return { window: { start, end }, byCategory: map };
 }
 
@@ -234,12 +237,15 @@ function insights(uid) {
     }
   }
 
-  // 2) Large transactions in the current cycle
+  // 2) Large transactions in the current cycle. amount is encrypted at rest,
+  // so we scan decrypted rows in JS instead of ORDER BY amount in SQL.
   const { start, end } = cycleWindow(cycleStart);
-  const big = db.prepare(
-    `SELECT * FROM transactions WHERE user_id = ? AND amount < 0 AND excluded = 0
-       AND date >= ? AND date < ? ORDER BY amount ASC LIMIT 1`
-  ).get(uid, start, end);
+  let big = null;
+  for (const t of getTxns(uid)) {
+    if (t.excluded || !(t.amount < 0)) continue;
+    if (!(t.date >= start && t.date < end)) continue;
+    if (!big || t.amount < big.amount) big = t;   // most negative = largest spend
+  }
   if (big && -big.amount >= 200) {
     out.push({
       tone: 'neutral', icon: 'info',

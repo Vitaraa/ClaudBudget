@@ -2,6 +2,7 @@
 /* ============================================================
    Auth — password hashing (scrypt) + JWT (HMAC-SHA256).
    All built on node:crypto. No external dependencies.
+   The signing secret is kept outside data/ (see SECRET below).
    ============================================================ */
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -13,7 +14,8 @@ const nowISO = () => new Date().toISOString();
 /* ---- stable signing secret (persisted so tokens survive restarts) ---- */
 const SECRET = (() => {
   if (process.env.CLAUD_SECRET) return process.env.CLAUD_SECRET;
-  const file = path.join(__dirname, '..', '..', 'data', '.secret');
+  // Kept OUT of data/ so it isn't grabbed alongside a stolen database/backup.
+  const file = process.env.CLAUD_SECRET_FILE || path.join(__dirname, '..', '..', '.claud-secret');
   try {
     return fs.readFileSync(file, 'utf8').trim();
   } catch {

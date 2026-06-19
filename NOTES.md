@@ -71,21 +71,28 @@ surprise.
 - `data/` is auto-created. It currently contains an empty database file from my testing
   (no user accounts in it). Delete `data/claud.db*` for a pristine start if you like.
 - Security posture: parameterized SQL everywhere (no injection), scrypt password hashing,
-  signed JWTs, per-user authorization on every route, and a path-traversal guard on static files.
-- Set a fixed `CLAUD_SECRET` env var in production to keep sessions valid across restarts on
-  multiple machines (otherwise a random secret is generated and saved to `data/.secret`).
+  signed JWTs, per-user authorization on every route, a path-traversal guard on static files, and
+  AES-256-GCM at-rest encryption of all sensitive columns (key from `CLAUD_ENC_KEY`, held outside
+  the database).
+- Set fixed `CLAUD_SECRET` (signs sessions) and `CLAUD_ENC_KEY` (`openssl rand -hex 32`; encrypts
+  data at rest) env vars in production — see `SETUP.md`. Otherwise the app auto-generates fallbacks
+  in the app root (`.claud-secret`, `.claud-enc.key`), both outside `data/` and gitignored. The
+  encryption key must stay outside `data/` and out of DB backups, or the at-rest protection is moot.
 
 ## Security posture & email-auth roadmap (recap — full detail in `EMAIL_AUTH_PLAN.md`)
 
 **What encryption we do for user data today:** passwords are scrypt-**hashed** (one-way, not
 decryptable); sessions are HMAC-SHA256 **signed** JWTs (tamper-evident, but the payload is readable
-base64 — signing isn't encryption); **all other user data** (accounts, balances, transactions,
-holdings, email) is stored **plaintext** in `data/claud.db` — no field-level or at-rest DB
-encryption; and the Node server speaks **plain HTTP** (TLS only if a proxy like Cloudflare
-terminates it). Bottom line: credentials are protected and sessions are tamper-evident, but the
-financial data itself is **not encrypted at rest or, by itself, in transit**. Hardening order:
-HTTPS in front first, then at-rest (AES-GCM on sensitive columns, or SQLCipher), then move the
-signing secret to a secrets store.
+base64 — signing isn't encryption); **all sensitive user data** (account names/balances,
+transactions, holdings, goals, budgets, foresight, settings) is now **encrypted at rest** with
+AES-256-GCM, per value, via a wrapper around the SQLite layer (`server/lib/crypto.js` +
+`server/lib/model.js`). The key (`CLAUD_ENC_KEY`) is held **outside** `data/claud.db`, so a stolen
+database file or backup is unreadable without it. Deliberately left plaintext so the DB stays
+queryable: ids, foreign keys, dates, flags, `plan`, and the **email** (needed to log in / send
+mail). In transit the app still speaks **plain HTTP** (TLS comes from the Cloudflare tunnel in
+front). Bottom line: credentials, sessions, and at-rest data are all protected; the remaining gaps
+are app-level TLS and a fully compromised *running* server (which holds the key in memory). Next
+hardening: keep TLS at the edge; optionally move `CLAUD_ENC_KEY` into a secrets manager.
 
 **Email-auth plan — 4 flows** (chosen scope; full plan + endpoints/schema in `EMAIL_AUTH_PLAN.md`):
 email verification on signup, password reset, passwordless magic-link login, and finishing the

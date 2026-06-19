@@ -157,26 +157,33 @@ Straight answer, because hashing and signing are easy to mistake for encryption:
   decrypt them, which is correct.
 - **Sessions — signed, not encrypted.** JWTs are HMAC-SHA256 **signed**, so the payload (user id,
   issued/expiry) is tamper-evident but **not secret** — it's base64, anyone holding the token can
-  read it. The signing secret is `CLAUD_SECRET` or a random value persisted to `data/.secret`.
-- **All other user data — not encrypted at rest.** Accounts, balances, transactions, holdings,
-  goals, and the email address itself are stored as **plaintext** in the SQLite file
-  (`data/claud.db`). There is no field-level encryption and no encrypted-database layer
-  (Node's built-in `node:sqlite` has no SQLCipher support).
+  read it. The signing secret is `CLAUD_SECRET` or a random value persisted to `.claud-secret`
+  (app root, outside `data/`).
+- **All other sensitive data — now encrypted at rest (AES-256-GCM).** Account names/balances,
+  transactions (name/amount/category/notes/tags), holdings, goals, budgets, foresight and settings
+  are encrypted per value in `data/claud.db` via a wrapper around the SQLite layer
+  (`server/lib/crypto.js` + `server/lib/model.js`). The key is `CLAUD_ENC_KEY`, held **outside** the
+  database, so a stolen `claud.db` or backup is unreadable without it. Structural/temporal columns
+  stay plaintext so the DB remains queryable: ids, foreign keys, dates, sort, flags, `plan`, and the
+  **email address** (the server must read it to log you in and send mail).
 - **In transit — no TLS in the app itself.** The server is plain HTTP; any encryption in transit
   has to come from a reverse proxy / Cloudflare in front of it.
 
-So: **we protect credentials (hashing) and detect session tampering (signing), but we do not
-encrypt the actual financial data at rest or, by itself, in transit.**
+So: **credentials are hashed, sessions are signed, and the financial data is now encrypted at
+rest.** The remaining gap is transit (plain HTTP behind the Cloudflare tunnel) and the fact that a
+fully compromised *running* server holds the key in memory — the accepted limit of at-rest
+encryption. A stolen database file or backup, on its own, reveals nothing sensitive.
 
 ### If you want to raise that bar
 - **In transit:** put HTTPS in front (Cloudflare origin cert or a TLS-terminating proxy) — the
   single highest-value step, and it pairs with the email-link requirement above.
-- **At rest:** options, roughly in order of effort — full-disk/volume encryption on the host
-  (cheap, coarse); encrypt selected sensitive columns with an app-held key (`node:crypto` AES-GCM,
-  key from env/KMS); or move to a DB/driver that supports transparent encryption (SQLCipher via a
-  native driver, which would mean dropping the zero-dependency `node:sqlite` approach).
-- **Secret management:** set a fixed `CLAUD_SECRET` from a secrets store rather than the on-disk
-  `data/.secret`, and keep `data/` off any backup that isn't itself encrypted.
+- **At rest:** done — sensitive columns are encrypted with `node:crypto` AES-256-GCM, key from
+  `CLAUD_ENC_KEY` (env), keeping the zero-dependency `node:sqlite` approach. Optional extra layers
+  for defense in depth: full-disk/volume encryption on the host, or a secrets manager (Vault/KMS)
+  holding the key instead of the env file.
+- **Secret management:** set fixed `CLAUD_SECRET` and `CLAUD_ENC_KEY` from a `chmod 600` env file
+  (or a secrets store) rather than the on-disk fallbacks, and keep the encryption key in a backup
+  **separate** from `data/` — storing the key alongside the database defeats the point.
 
 ---
 

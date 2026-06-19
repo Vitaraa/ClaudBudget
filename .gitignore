@@ -1,5 +1,8 @@
 # Local server data — NEVER commit (contains the JWT signing secret + your database)
 data/
+# Secrets kept outside data/ — NEVER commit (prefer CLAUD_ENC_KEY / CLAUD_SECRET env in prod)
+.claud-enc.key
+.claud-secret
 node_modules/
 .env
 *.log

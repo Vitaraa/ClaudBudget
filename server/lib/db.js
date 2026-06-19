@@ -14,14 +14,14 @@ const DB_PATH = process.env.CLAUD_DB || path.join(DATA_DIR, 'claud.db');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(DB_PATH);
+const rawDb = new DatabaseSync(DB_PATH);
 // WAL is an optimization; some network/virtual filesystems don't support the
 // shared-memory file it needs. Try it, but never let it stop the app booting.
-try { db.exec('PRAGMA journal_mode = WAL;'); } catch { /* falls back to default journal */ }
-try { db.exec('PRAGMA foreign_keys = ON;'); } catch {}
+try { rawDb.exec('PRAGMA journal_mode = WAL;'); } catch { /* falls back to default journal */ }
+try { rawDb.exec('PRAGMA foreign_keys = ON;'); } catch {}
 
 /* ------------------------------------------------------------------ schema */
-db.exec(`
+rawDb.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   email       TEXT UNIQUE NOT NULL,
@@ -191,7 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_authtok_user ON auth_tokens(user_id, purpose);
    existing sessions stay valid because old JWTs simply carry no token_version
    claim (treated as 0 — see auth.js). */
 function addColumn(sql) {
-  try { db.exec(sql); }
+  try { rawDb.exec(sql); }
   catch (e) {
     const msg = String((e && e.message) || e);
     if (!/duplicate column name/i.test(msg)) throw e;   // re-throw anything unexpected
@@ -201,18 +201,34 @@ addColumn("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 
 addColumn("ALTER TABLE users ADD COLUMN token_version  INTEGER NOT NULL DEFAULT 0");
 addColumn("ALTER TABLE users ADD COLUMN google_sub     TEXT");
 
+/* ---- At-rest encryption -------------------------------------------------
+   Wrap the raw DB so sensitive columns are encrypted on write and decrypted
+   on read (see lib/model.js + lib/crypto.js), then encrypt any pre-existing
+   plaintext rows once. The key is held OUTSIDE the database, so a stolen
+   claud.db (or a DB-only backup) is useless on its own. */
+const { wrap, migrateEncryption } = require('./model');
+const db = wrap(rawDb);
+
+rawDb.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+(function ensureEncrypted() {
+  const row = rawDb.prepare("SELECT value FROM meta WHERE key = 'enc_version'").get();
+  if (row && row.value === '1') return;             // already migrated
+  migrateEncryption(rawDb);
+  rawDb.prepare("INSERT INTO meta (key, value) VALUES ('enc_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+})();
+
 // Manual transaction helper. node:sqlite's DatabaseSync has no .transaction()
 // (unlike better-sqlite3), so we wrap BEGIN / COMMIT / ROLLBACK ourselves.
 function tx(fn) {
-  db.exec('BEGIN');
+  rawDb.exec('BEGIN');
   try {
     const result = fn();
-    db.exec('COMMIT');
+    rawDb.exec('COMMIT');
     return result;
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch {}
+    try { rawDb.exec('ROLLBACK'); } catch {}
     throw e;
   }
 }
 
-module.exports = { db, DB_PATH, tx };
+module.exports = { db, rawDb, DB_PATH, tx };

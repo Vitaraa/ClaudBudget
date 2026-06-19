@@ -60,6 +60,7 @@ subdomain to it in the Cloudflare dashboard. Adding an app later = run it + add 
    ```bash
    sudo tee /etc/claud-budget.env >/dev/null <<EOF
    CLAUD_SECRET=$(openssl rand -base64 48)
+   CLAUD_ENC_KEY=$(openssl rand -hex 32)
    APP_BASE_URL=https://budget.claudapps.ca
    # Email auth (verification + password reset). Resend by default.
    EMAIL_API_KEY=
@@ -73,9 +74,14 @@ subdomain to it in the Cloudflare dashboard. Adding an app later = run it + add 
    EOF
    sudo chmod 600 /etc/claud-budget.env
    ```
-   - `CLAUD_SECRET` signs login tokens. The app otherwise auto-generates `data/.secret`;
-     setting it here is the production-safe way. **Don't change it once real users exist —
-     it logs everyone out.**
+   - `CLAUD_SECRET` signs login tokens. The app otherwise auto-generates `.claud-secret` (in the
+     app root, outside `data/`); setting it here is the production-safe way. **Don't change it once
+     real users exist — it logs everyone out.**
+   - `CLAUD_ENC_KEY` is the at-rest data-encryption key (AES-256-GCM). It encrypts the sensitive
+     columns — names, balances, transactions, holdings, goals — inside `data/claud.db`. Keeping it
+     here in `/etc/claud-budget.env` (never inside `data/`, never in a DB backup) is the whole
+     point: a stolen `claud.db` is unreadable without it. Must be 32 bytes (`openssl rand -hex 32`).
+     **Don't change it once real data exists — existing rows can't be decrypted with a different key.**
    - `APP_BASE_URL` is the public origin used to build the **absolute https links** in
      verification/reset emails and the Google redirect URI. Set it to your real URL
      (`https://budget.claudapps.ca`) — never leave it as localhost in production, or emailed
@@ -219,8 +225,10 @@ mkdir -p /home/conrad/backups
 ) | crontab -
 ```
 
-- Also keep a copy of `/etc/claud-budget.env` and `data/.secret` somewhere safe — without
-  the secret, restored sessions/tokens won't validate.
+- Also keep a copy of `/etc/claud-budget.env` somewhere safe — it holds `CLAUD_SECRET` (without it
+  restored sessions won't validate) and `CLAUD_ENC_KEY` (without it the encrypted `data/claud.db`
+  can't be decrypted at all). Critically, back it up **separately** from `data/` — putting the key
+  in the same backup as the database defeats the at-rest encryption.
 - **Push backups offsite** (another machine, or `rclone`/`restic` to cloud). One SSD = one
   failure away from total loss.
 

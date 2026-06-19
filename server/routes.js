@@ -2,6 +2,8 @@
 /* ============================================================
    Claud API — all routes. Every data route is auth-scoped to the
    token's user; ownership is enforced on every read and write.
+   Sensitive columns are encrypted at rest via the wrapped db (lib/model.js);
+   handlers see plaintext, the SQLite file holds ciphertext.
    ============================================================ */
 const crypto = require('node:crypto');
 const { db, tx } = require('./lib/db');
@@ -37,6 +39,17 @@ function ownedRow(table, id, uid) {
   const row = db.prepare(`SELECT * FROM ${table} WHERE id = ? AND user_id = ?`).get(id, uid);
   if (!row) throw new HttpError(404, 'Not found');
   return row;
+}
+
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/* Resolve an account by its (now-encrypted) name. Equality lookups in SQL no
+   longer work against ciphertext, so scan the user's accounts and match the
+   decrypted name in JS. */
+function findAccountByName(uid, name) {
+  if (!name) return null;
+  const rows = db.prepare('SELECT id, name FROM accounts WHERE user_id = ?').all(uid);
+  return rows.find((a) => a.name === name) || null;
 }
 
 /* --------------------------------------------------------- row mappers */
@@ -375,7 +388,7 @@ function register(router) {
     let acctName = str(b.account || b.account_name, 'account');
     let acctId = str(b.account_id, 'account_id');
     if (acctId) { const a = db.prepare('SELECT name FROM accounts WHERE id=? AND user_id=?').get(acctId, uid); if (a) acctName = a.name; }
-    else if (acctName) { const a = db.prepare('SELECT id FROM accounts WHERE name=? AND user_id=?').get(acctName, uid); if (a) acctId = a.id; }
+    else if (acctName) { const a = findAccountByName(uid, acctName); if (a) acctId = a.id; }
     let cat = str(b.cat || b.category, 'category');
     const name = str(b.name, 'Name', { required: true });
     if (!cat) cat = applyRules(uid, name);     // auto-categorize from rules
@@ -396,7 +409,7 @@ function register(router) {
     // account change
     let acctId = row.account_id, acctName = row.account_name;
     if (b.account_id !== undefined) { acctId = str(b.account_id, 'account_id'); const a = acctId && db.prepare('SELECT name FROM accounts WHERE id=? AND user_id=?').get(acctId, uid); acctName = a ? a.name : acctName; }
-    else if (b.account !== undefined || b.account_name !== undefined) { acctName = str(b.account || b.account_name, 'account'); const a = acctName && db.prepare('SELECT id FROM accounts WHERE name=? AND user_id=?').get(acctName, uid); acctId = a ? a.id : null; }
+    else if (b.account !== undefined || b.account_name !== undefined) { acctName = str(b.account || b.account_name, 'account'); const a = acctName && findAccountByName(uid, acctName); acctId = a ? a.id : null; }
     db.prepare(`UPDATE transactions SET account_id=?,account_name=?,name=?,category=?,amount=?,date=?,icon=?,review=?,reason=?,excluded=?,note=?,tags=?,splits=?,attachment=?,history=? WHERE id=? AND user_id=?`).run(
       acctId, acctName,
       b.name != null ? str(b.name, 'Name', { required: true }) : row.name,
@@ -444,7 +457,7 @@ function register(router) {
         const id = newId('tx_');
         let acctName = str(b.account || b.account_name, 'account');
         let acctId = null;
-        if (acctName) { const a = db.prepare('SELECT id FROM accounts WHERE name=? AND user_id=?').get(acctName, uid); if (a) acctId = a.id; }
+        if (acctName) { const a = findAccountByName(uid, acctName); if (a) acctId = a.id; }
         const name = str(b.name, 'Name', { required: true });
         let cat = str(b.cat || b.category, 'category') || applyRules(uid, name);
         db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,created_at)
@@ -627,9 +640,11 @@ function register(router) {
       if (fromId) {
         account = db.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').get(fromId, uid);
         if (!account) throw new HttpError(404, 'Source account not found');
-        db.prepare('UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?').run(amount, fromId, uid);
+        // balance is encrypted at rest -> read-modify-write instead of SQL arithmetic
+        db.prepare('UPDATE accounts SET balance=? WHERE id=? AND user_id=?').run(round2((account.balance || 0) - amount), fromId, uid);
       }
-      db.prepare('UPDATE goals SET saved = saved + ? WHERE id=? AND user_id=?').run(amount, goal.id, uid);
+      // saved is encrypted at rest -> read-modify-write (goal row fetched above is decrypted)
+      db.prepare('UPDATE goals SET saved=? WHERE id=? AND user_id=?').run(round2((goal.saved || 0) + amount), goal.id, uid);
       db.prepare('INSERT INTO goal_contributions (id,user_id,goal_id,amount,date,from_account_id) VALUES (?,?,?,?,?,?)')
         .run(newId('gc_'), uid, goal.id, amount, today(), fromId || null);
     });
@@ -679,11 +694,21 @@ function register(router) {
   // Live quotes. ?symbols=AAPL,RY.TO  (defaults to the user's holdings).
   router.get('/api/quotes', auth.requireAuth(async (req, res, ctx) => {
     const raw = (ctx.query.get('symbols') || '').trim();
-    let syms = raw
-      ? raw.split(',').map((s) => s.trim()).filter(Boolean)
-      : db.prepare(`SELECT DISTINCT ticker FROM holdings
-                    WHERE user_id = ? AND kind <> 'cash' AND ticker IS NOT NULL AND ticker <> ''`)
-          .all(ctx.user.id).map((r) => r.ticker);
+    let syms;
+    if (raw) {
+      syms = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    } else {
+      // ticker is encrypted at rest, so SQL DISTINCT / <> '' can't work — dedupe here.
+      const seen = new Set();
+      syms = [];
+      for (const h of db.prepare('SELECT ticker, kind FROM holdings WHERE user_id = ?').all(ctx.user.id)) {
+        if (!h.ticker || h.kind === 'cash') continue;
+        const t = h.ticker.trim();
+        if (!t || seen.has(t.toUpperCase())) continue;
+        seen.add(t.toUpperCase());
+        syms.push(t);
+      }
+    }
     syms = syms.filter((s) => s && s.toUpperCase() !== 'CASH').slice(0, 60);
     let data = {};
     try { data = await quotes.getQuotes(syms); } catch (e) { console.error('quotes failed:', e); }
