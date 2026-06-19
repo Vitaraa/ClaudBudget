@@ -91,7 +91,7 @@ function ResetApp() {
     <Card>
       <div className="auth-head">
         <h1>Set a new password</h1>
-        <p>Choose a new password for your Claud account.</p>
+        <p>Choose a new password for your ClaudBudget account.</p>
       </div>
       <form className="form" onSubmit={submit} noValidate>
         <div className="field">

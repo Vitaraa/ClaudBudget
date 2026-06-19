@@ -75,7 +75,7 @@ function VerifyApp() {
           <h1>Email confirmed</h1>
           <p>Thanks — your email address is verified. You're all set.</p>
         </div>
-        <a className="btn" href="/app">Continue to Claud</a>
+        <a className="btn" href="/app">Continue to ClaudBudget</a>
       </Card>
     );
   }
@@ -87,7 +87,7 @@ function VerifyApp() {
           <h1>Couldn't confirm your email</h1>
           <p>{msg}</p>
         </div>
-        <a className="btn" href="/app">Go to Claud</a>
+        <a className="btn" href="/app">Go to ClaudBudget</a>
         <div className="auth-foot">You can resend the confirmation email from the banner inside the app.</div>
       </Card>
     );
@@ -98,7 +98,7 @@ function VerifyApp() {
         <h1>Confirmation link incomplete</h1>
         <p>This link is missing its token. Open the most recent link from your verification email.</p>
       </div>
-      <a className="btn" href="/app">Go to Claud</a>
+      <a className="btn" href="/app">Go to ClaudBudget</a>
     </Card>
   );
 }

@@ -522,6 +522,49 @@ function FsModal({ draft, isNew, onField, onSave, onDelete, onClose }) {
 }
 
 /* ============================================================
+   GET-STARTED PANEL — shown when the user has NO plans yet.
+   Replaces the demo projection (KPIs + chart + budget table that
+   would otherwise render off the hardcoded FS_INCOME_BASE /
+   FS_EXPENSE_BASE) with a friendly intro and a CTA that opens this
+   page's OWN add-plan flow (the same FS_KINDS picker the toolbar
+   "+ New plan" button uses).
+   ============================================================ */
+function FsGetStarted({ onPick }) {
+  const { Card, Button } = FS;
+  const [menu, setMenu] = fsUseState(false);
+  return (
+    <Card widget>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
+        gap: 16, padding: "44px 24px", maxWidth: 480, margin: "0 auto" }}>
+        <span aria-hidden="true" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 56, height: 56, borderRadius: "var(--radius)", background: "var(--accent-soft)", color: "var(--accent)" }}>
+          <FsIcon kind="retirement" size={26} />
+        </span>
+        <div>
+          <div style={{ fontSize: "var(--text-h2)", fontWeight: 700, letterSpacing: "var(--tracking-tight)" }}>Map out your financial future</div>
+          <p style={{ color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.55, margin: "10px 0 0" }}>
+            Add life events — a house, a new job, kids, retirement — and watch each one
+            bend your projected net worth. Drag any event in time to feel the trade-off.
+          </p>
+        </div>
+        <div className="fs-dd" style={{ position: "relative" }}>
+          {Button && <Button variant="primary" onClick={() => setMenu((v) => !v)}>Add your first life event {"▾"}</Button>}
+          {menu &&
+            <div className="fs-dd-menu" onMouseLeave={() => setMenu(false)}>
+              {FS_KINDS.map((x) =>
+                <button key={x.key} className="fs-dd-item" onClick={() => { setMenu(false); onPick(x.key); }}>
+                  <span className="fs-ico"><FsIcon kind={x.key} size={17} /></span>{x.label}
+                </button>
+              )}
+            </div>
+          }
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ============================================================
    FORESIGHT PAGE
    ============================================================ */
 function ForesightPage() {
@@ -686,6 +729,19 @@ function ForesightPage() {
     if (p.kind === "pension") return `${fsMoney(p.amount)}/yr from ${p.year}`;
     return `${fsMoney(p.amount)}/yr, ${p.year}\u2013${p.end || p.year}`;
   };
+
+  // Brand-new account with NO plans: show the get-started panel instead of a
+  // demo projection (the chart + KPIs + budget table are all driven off the
+  // hardcoded income/expense base until a real plan exists). The plan modal
+  // still mounts so the CTA can open this page's own add-plan flow. All hooks
+  // above run unconditionally, so this early return keeps hook order stable.
+  if (!plans.length) {
+    return (
+      <React.Fragment>
+        <FsGetStarted onPick={openNew} />
+        {modal && <FsModal draft={modal.draft} isNew={modal.isNew} onField={modalField} onSave={saveModal} onDelete={deleteModal} onClose={() => setModal(null)} />}
+      </React.Fragment>);
+  }
 
   return (
     <React.Fragment>

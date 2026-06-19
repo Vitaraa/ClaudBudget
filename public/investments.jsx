@@ -431,6 +431,37 @@ function InvPriceChart({ data, xLabels, up }) {
 }
 
 /* ============================================================
+   GET-STARTED PANEL — shown when the account has NO holdings.
+   Replaces the KPI / benchmark-chart / allocation widgets (which
+   would otherwise render demo numbers off the hardcoded INV_SP500
+   / INV_PORT levels) with a friendly intro + a single primary CTA.
+   ============================================================ */
+function InvGetStarted() {
+  const { Card, Button } = IV;
+  // The add-holding modal lives in app.jsx; it listens for this event.
+  const addHolding = () => window.dispatchEvent(new CustomEvent("claud:add-holding"));
+  return (
+    <Card widget>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
+        gap: 16, padding: "44px 24px", maxWidth: 460, margin: "0 auto" }}>
+        <span aria-hidden="true" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 56, height: 56, borderRadius: "var(--radius)", background: "var(--accent-soft)", color: "var(--accent)" }}>
+          <Icon name="chart" />
+        </span>
+        <div>
+          <div style={{ fontSize: "var(--text-h2)", fontWeight: 700, letterSpacing: "var(--tracking-tight)" }}>Track your investments</div>
+          <p style={{ color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.55, margin: "10px 0 0" }}>
+            Add the stocks, ETFs, and cash you hold to see your portfolio value, returns,
+            and how you stack up against the S&amp;P 500 — all in one place.
+          </p>
+        </div>
+        {Button && <Button variant="primary" onClick={addHolding}>Add your first holding</Button>}
+      </div>
+    </Card>
+  );
+}
+
+/* ============================================================
    INVESTMENTS PAGE — KPIs, compare chart, editable holdings
    ============================================================ */
 function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
@@ -495,6 +526,11 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
   const SortInd = ({ k }) => sort.key === k
     ? <span className="hh-ind">{sort.dir === 1 ? "\u2191" : "\u2193"}</span>
     : null;
+
+  // Brand-new / empty account: show the get-started panel instead of demo KPIs,
+  // the hardcoded vs-benchmark chart, and an empty allocation. (All hooks above
+  // run unconditionally, so this early return keeps hook order stable.)
+  if (!holdings.length) return <InvGetStarted />;
 
   return (
     <React.Fragment>

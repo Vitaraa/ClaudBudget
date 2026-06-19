@@ -320,14 +320,14 @@ function AuthPanel({ headline }) {
       {apiErr && <div className="status bad toast" style={{ color: "var(--red)" }}>{apiErr}</div>}
 
       <div className="auth-foot">
-        {isReg ? "Already have an account? " : "New to Claud? "}
+        {isReg ? "Already have an account? " : "New to ClaudBudget? "}
         <button type="button" className="link" onClick={() => go(isReg ? "login" : "register")}>
           {isReg ? "Sign in" : "Create one"}
         </button>
       </div>
 
       <p className="auth-legal">
-        By continuing you agree to Claud's <a href="/legal#terms">Terms</a> and <a href="/legal#privacy">Privacy Policy</a>.
+        By continuing you agree to ClaudBudget's <a href="/legal#terms">Terms</a> and <a href="/legal#privacy">Privacy Policy</a>.
       </p>
     </div>
   );
@@ -373,7 +373,7 @@ function App() {
         <section className="lp-left">
           <div className="brandrow">
             <Mark />
-            <span className="wordmark">Clau<span className="wd-accent">d</span></span>
+            <span className="wordmark">Budge<span className="wd-accent">t</span></span>
             <span className="pill">Personal finance</span>
           </div>
 
@@ -381,7 +381,7 @@ function App() {
             <span className="eyebrow">Budgeting for people new to budgeting</span>
             <h1>See your whole financial future on one <span className="em">calm</span> screen.</h1>
             <p className="sub">
-              Claud connects your accounts, tracks every dollar, and projects your net worth
+              ClaudBudget connects your accounts, tracks every dollar, and projects your net worth
               decades ahead — no streaks, no confetti, just honest numbers.
             </p>
           </div>
@@ -416,7 +416,7 @@ function App() {
           </div>
 
           <div className="lp-left-foot">
-            <span>© 2026 Claud</span>
+            <span>© 2026 ClaudBudget</span>
             <a href="/legal#privacy">Privacy</a>
             <a href="/legal#terms">Terms</a>
             <a href="/legal#security">Security</a>

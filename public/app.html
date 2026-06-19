@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>ClaudBudget — Dashboard</title>
+<title>Budget — Dashboard</title>
 
 <!-- Claud design system -->
 <link rel="stylesheet" href="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/styles.css" />
@@ -27,6 +27,7 @@
 
     --accent: #c05f2e;            /* terracotta (default) */
     --accent-contrast: #fffaf4;
+    --mark-line: #f6f1e4;
     --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
     --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
 
@@ -64,6 +65,7 @@
 
     --accent: #cf7846;          /* softer terracotta on dark */
     --accent-contrast: #1a1208;
+    --mark-line: #f6f1e4;
     --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
     --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
 
@@ -372,6 +374,13 @@
 
   /* ---- Category list ---- */
   .cat-list { display: flex; flex-direction: column; gap: 13px; }
+  /* Dashboard-only: cap the "Budget by category" widget so it matches the
+     adjacent "Cash flow" card height, with a themed (accent) scrollbar. */
+  .cat-list--dash { max-height: 260px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--accent-line) transparent; }
+  .cat-list--dash::-webkit-scrollbar { width: 8px; }
+  .cat-list--dash::-webkit-scrollbar-track { background: transparent; }
+  .cat-list--dash::-webkit-scrollbar-thumb { background: var(--accent-line); border-radius: 8px; }
+  .cat-list--dash::-webkit-scrollbar-thumb:hover { background: var(--accent); }
   .cat-row { display: flex; flex-direction: column; gap: 6px; }
   .cat-row[draggable] { cursor: grab; }
   .cat-row.dragging { opacity: 0.45; cursor: grabbing; }

@@ -382,14 +382,8 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
 
   const openRow = (name) => onOpen && onOpen(name);
 
-  if (flat.length === 0) {
-    return (
-      <div className="placeholder">
-        <Icon name="bank" className="ph-ico" />
-        <h2>No accounts</h2>
-        <p>You've removed every account. Add one to start tracking again.</p>
-      </div>);
-  }
+  const empty = flat.length === 0;
+  const creditCount = flat.filter((a) => a.bal < 0).length;
 
   return (
     <React.Fragment>
@@ -397,19 +391,28 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
         <Card widget><div className="kpi">
           <span className="kpi-label">Total assets</span>
           <span className="kpi-val">{money(assets, 2)}</span>
-          <span className="kpi-delta pos">{"\u2191"} {signed(4570, 0)} this month</span>
+          {empty
+            ? <span className="kpi-delta" style={{ color: "var(--muted)" }}>{"\u2014"}</span>
+            : <span className="kpi-delta pos">{"\u2191"} {signed(4570, 0)} this month</span>}
         </div></Card>
         <Card widget><div className="kpi">
           <span className="kpi-label">Total liabilities</span>
           <span className="kpi-val neg">{money(liabilities, 2)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>1 credit account</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{creditCount} credit account{creditCount === 1 ? "" : "s"}</span>
         </div></Card>
         <Card widget><div className="kpi">
           <span className="kpi-label">Net worth</span>
           <span className="kpi-val">{money(net, 2)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{flat.length} accounts · synced 2h ago</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{empty ? "0 accounts" : flat.length + " accounts · synced 2h ago"}</span>
         </div></Card>
       </div>
+
+      {empty &&
+        <div className="placeholder">
+          <Icon name="bank" className="ph-ico" />
+          <h2>No accounts</h2>
+          <p>You've removed every account. Add one to start tracking again.</p>
+        </div>}
 
       {ACCOUNT_GROUPS.map((g) => {
         const accts = [...g.accounts, ...added.filter((a) => a.group === g.label)].filter((a) => !deleted.includes(a.name));
@@ -1410,7 +1413,7 @@ function SettingsModal({ t, setTweak, onClose, currency, setCurrency, cycleStart
             }
             {sec === "Preferences" &&
             <React.Fragment>
-              <Row title="Currency" desc="How money is displayed throughout Claud.">
+              <Row title="Currency" desc="How money is displayed throughout ClaudBudget.">
                 <select className="set-select" value={currency} onChange={(e) => setCurrency(e.target.value)}>
                   {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
@@ -1486,11 +1489,11 @@ function SettingsModal({ t, setTweak, onClose, currency, setCurrency, cycleStart
 
 /* ---------------------------------- Help & support ---- */
 const HELP_FAQ = [
-  { q: "How does Claud know my account balances?", a: "Claud reads the balances you connect under Accounts and refreshes them periodically. Nothing is moved — it only ever reads, so your money stays where it is." },
+  { q: "How does ClaudBudget know my account balances?", a: "ClaudBudget reads the balances you connect under Accounts and refreshes them periodically. Nothing is moved — it only ever reads, so your money stays where it is." },
   { q: "What is Foresight projecting?", a: "Foresight walks your net worth forward year by year using today's budget and the life-event plans you add. Figures are shown in today's dollars, so the line reflects real purchasing power." },
   { q: "Why don't my Foresight expenses match my budget exactly?", a: "Foresight rolls your monthly budget categories into a few annual groups (Housing, Food & dining, Lifestyle, and so on) and multiplies by twelve. Edit a category in the Budget tab and the projection updates." },
   { q: "Does budget rollover carry over unspent money?", a: "Yes. With rollover on, whatever you don't spend in a category this month is added to next month's available amount for that category." },
-  { q: "Is my data shared with anyone?", a: "No. Claud is a single-person app behind your login. Your figures aren't sold, shared, or used to train anything." }
+  { q: "Is my data shared with anyone?", a: "No. ClaudBudget is a single-person app behind your login. Your figures aren't sold, shared, or used to train anything." }
 ];
 
 /* ---------------------------------- profile modal ---- */
@@ -1580,7 +1583,7 @@ function HelpModal({ onClose }) {
 
   const OPTIONS = [
     { id: "bug", icon: "bug", title: "Report a bug", desc: "Something looks wrong or isn't working." },
-    { id: "feature", icon: "bulb", title: "Request a feature", desc: "Suggest something you'd like Claud to do." },
+    { id: "feature", icon: "bulb", title: "Request a feature", desc: "Suggest something you'd like ClaudBudget to do." },
     { id: "faq", icon: "book", title: "Browse the FAQ", desc: "Quick answers to common questions." }
   ];
   const titleOf = { bug: "Report a bug", feature: "Request a feature", faq: "Frequently asked questions" };
@@ -1836,6 +1839,236 @@ function VerifyBanner() {
   );
 }
 
+/* ============================================================
+   FIRST-RUN SETUP MODAL
+   Shown once on first login (when settings.onboarded is falsy). Lets the user
+   pick which of the seeded default categories to keep, and optionally fill in a
+   recommended 50/30/20 budget from an average monthly income.
+   On finish it deletes unchecked categories and (if income given) updates the
+   kept categories' budgets, then flips settings.onboarded = true so it never
+   reshows. All names below are FirstRun*/Frs*-prefixed to stay unique in the
+   shared Babel scope.
+   ============================================================ */
+
+// Default monthly amounts the 50/30/20 split is proportioned from (the seeded
+// starter budget). Keyed by category NAME (see server DEFAULT_BUDGET).
+const FRS_DEFAULT_AMT = {
+  "Housing": 1700, "Groceries": 700, "Utilities": 260, "Transport": 300, "Insurance": 180,
+  "Dining": 300, "Shopping": 400, "Entertainment": 150, "Subscriptions": 120,
+  "Health & fitness": 250, "Misc": 240, "Emergency fund": 800, "General savings": 250
+};
+
+// Map a (groupLabel, categoryName) to a 50/30/20 bucket. Group-level mapping,
+// except "Health & other" which is split per-category. Unknown -> null (left as-is).
+function frsBucketFor(groupLabel, catName) {
+  if (groupLabel === "Essentials") return "needs";
+  if (groupLabel === "Lifestyle") return "wants";
+  if (groupLabel === "Savings goals") return "savings";
+  if (groupLabel === "Health & other") {
+    if (catName === "Health & fitness") return "needs";
+    if (catName === "Misc") return "wants";
+    return null;
+  }
+  return null;
+}
+const FRS_BUCKET_PCT = { needs: 0.5, wants: 0.3, savings: 0.2 };
+
+// Snapshot the live budget tree as [{id,label,cats:[{id,name,budget,color}]}].
+// Prefer the BudgetPage's live store (real DB ids); fall back to joining the
+// boot payload's groups + dashCategories by group_id.
+function frsReadGroups() {
+  const store = window.__claudBudgetStore;
+  if (store && typeof store.get === "function") {
+    const g = store.get();
+    if (Array.isArray(g) && g.length) return g.map((grp) => ({ id: grp.id, label: grp.label, cats: (grp.cats || []).map((c) => ({ id: c.id, name: c.name, budget: c.budget || 0, color: c.color })) }));
+  }
+  const D = window.ClaudData || {};
+  const groups = D.budgetGroups || [];
+  const cats = D.dashCategories || [];
+  return groups.map((grp) => ({
+    id: grp.id, label: grp.label,
+    cats: cats.filter((c) => c.group_id === grp.id)
+      .sort((a, b) => (a.sort || 0) - (b.sort || 0))
+      .map((c) => ({ id: c.id, name: c.name, budget: c.budget || 0, color: c.color }))
+  }));
+}
+
+function FirstRunSetup({ onClose }) {
+  // Snapshot the budget tree once so the list is stable while toggling.
+  const [groups] = useState(frsReadGroups);
+  const allIds = React.useMemo(() => {
+    const out = []; groups.forEach((g) => g.cats.forEach((c) => out.push(c.id))); return out;
+  }, [groups]);
+  // checked category ids — default: everything checked
+  const [checked, setChecked] = useState(() => new Set(allIds));
+  const [useReco, setUseReco] = useState(false);
+  const [income, setIncome] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const isOn = (id) => checked.has(id);
+  const toggleCat = (id) => setChecked((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const groupState = (g) => {
+    const on = g.cats.filter((c) => checked.has(c.id)).length;
+    return on === 0 ? "none" : on === g.cats.length ? "all" : "some";
+  };
+  const toggleGroup = (g) => setChecked((prev) => {
+    const n = new Set(prev);
+    const allOn = g.cats.every((c) => n.has(c.id));
+    g.cats.forEach((c) => { if (allOn) n.delete(c.id); else n.add(c.id); });
+    return n;
+  });
+
+  const incomeNum = Number(income);
+  const hasIncome = useReco && Number.isFinite(incomeNum) && incomeNum > 0;
+
+  // Recommended amount per kept category, proportioned within each 50/30/20
+  // bucket by each category's default amount. Returns Map(catId -> dollars).
+  const recommended = React.useMemo(() => {
+    const map = new Map();
+    if (!hasIncome) return map;
+    // collect checked categories per bucket, with their default weights
+    const byBucket = { needs: [], wants: [], savings: [] };
+    groups.forEach((g) => g.cats.forEach((c) => {
+      if (!checked.has(c.id)) return;
+      const b = frsBucketFor(g.label, c.name);
+      const w = FRS_DEFAULT_AMT[c.name];
+      if (b && w != null) byBucket[b].push({ id: c.id, w });
+    }));
+    Object.keys(byBucket).forEach((b) => {
+      const items = byBucket[b];
+      const sum = items.reduce((s, x) => s + x.w, 0);
+      if (sum <= 0) return;
+      const dollars = incomeNum * FRS_BUCKET_PCT[b];
+      items.forEach((x) => map.set(x.id, Math.round(dollars * x.w / sum)));
+    });
+    return map;
+  }, [groups, checked, hasIncome, incomeNum]);
+
+  const keptCount = checked.size;
+
+  const finish = () => {
+    if (busy) return;
+    setBusy(true);
+    const API = window.ClaudAPI;
+    const tasks = [];
+    if (API) {
+      // delete unchecked categories
+      groups.forEach((g) => g.cats.forEach((c) => {
+        if (!checked.has(c.id)) tasks.push(API.del("/api/budget/categories/" + c.id).catch(() => {}));
+      }));
+      // update kept categories to the recommended amounts (only if income given)
+      if (hasIncome) {
+        recommended.forEach((amt, id) => {
+          if (checked.has(id)) tasks.push(API.put("/api/budget/categories/" + id, { budget: amt }).catch(() => {}));
+        });
+      }
+    }
+    const done = () => {
+      const flip = (API ? API.put("/api/settings", { onboarded: true }).catch(() => {}) : Promise.resolve());
+      flip.then(() => {
+        if (window.ClaudStore && ClaudStore.refresh) ClaudStore.refresh().catch(() => {});
+        onClose();
+      });
+    };
+    Promise.all(tasks).then(done, done);
+  };
+
+  const skip = () => {
+    if (busy) return;
+    setBusy(true);
+    const API = window.ClaudAPI;
+    const flip = (API ? API.put("/api/settings", { onboarded: true }).catch(() => {}) : Promise.resolve());
+    flip.then(() => onClose());
+  };
+
+  // tiny accent checkbox
+  const box = (on, mixed) => ({
+    width: 18, height: 18, flexShrink: 0, borderRadius: 5,
+    border: "1px solid " + (on || mixed ? "var(--accent)" : "var(--border)"),
+    background: on ? "var(--accent)" : mixed ? "var(--accent-soft)" : "var(--input-bg)",
+    color: "var(--accent-contrast)", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    fontSize: 12, fontWeight: 700, cursor: "pointer"
+  });
+
+  return (
+    <div className="set-overlay" onClick={(e) => { if (e.target === e.currentTarget) skip(); }}>
+      <div className="set-modal" role="dialog" aria-modal="true" aria-label="Set up your budget" style={{ maxWidth: 560 }}>
+        <div className="set-head">
+          <h2>Set up your budget</h2>
+          <button className="set-close" onClick={skip} aria-label="Skip setup">{"×"}</button>
+        </div>
+        <div className="set-body">
+          <p className="hs-intro" style={{ margin: "6px 0 14px" }}>
+            Welcome to ClaudBudget. We've started you with a set of categories — keep the ones you want, and we'll track your spending against them.
+          </p>
+
+          {groups.map((g) => {
+            const gs = groupState(g);
+            return (
+              <div key={g.id} style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                  <button type="button" onClick={() => toggleGroup(g)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", color: "var(--text)" }}>
+                    <span style={box(gs === "all", gs === "some")}>{gs === "all" ? "✓" : gs === "some" ? "–" : ""}</span>
+                    <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, letterSpacing: "var(--tracking-tight)" }}>{g.label}</span>
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingLeft: 28 }}>
+                  {g.cats.map((c) => {
+                    const on = isOn(c.id);
+                    const amt = recommended.get(c.id);
+                    return (
+                      <button key={c.id} type="button" onClick={() => toggleCat(c.id)}
+                        style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", padding: "6px 0", cursor: "pointer", fontFamily: "inherit", textAlign: "left", color: "var(--text)" }}>
+                        <span style={box(on, false)}>{on ? "✓" : ""}</span>
+                        <span className="cat-dot" style={{ width: 9, height: 9, borderRadius: 999, flexShrink: 0, background: c.color || "var(--accent)" }} />
+                        <span style={{ flex: 1, fontSize: "var(--text-sm)", fontWeight: 600, opacity: on ? 1 : 0.5 }}>{c.name}</span>
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
+                          {hasIncome && on && amt != null ? money(amt) : money(c.budget)}
+                        </span>
+                      </button>);
+                  })}
+                </div>
+              </div>);
+          })}
+
+          <div style={{ borderTop: "1px solid var(--border)", padding: "14px 0 4px" }}>
+            <div className="set-row" style={{ padding: "4px 0", borderBottom: "none" }}>
+              <div className="set-row-label">
+                <span className="srl-t">Recommended budget</span>
+                <span className="srl-d">Fill each category using the 50/30/20 rule from your average monthly income.</span>
+              </div>
+              <div className="set-row-control"><Switch on={useReco} onChange={setUseReco} /></div>
+            </div>
+            {useReco &&
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0 2px" }}>
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--muted)" }}>Average monthly income</span>
+                <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                  <span style={{ position: "absolute", left: 11, color: "var(--muted)", fontSize: "var(--text-sm)" }}>$</span>
+                  <input className="set-input" type="number" min="0" step="100" inputMode="numeric"
+                    value={income} onChange={(e) => setIncome(e.target.value)} placeholder="5,000"
+                    style={{ minWidth: 0, width: 150, paddingLeft: 22 }} />
+                </div>
+              </div>}
+            {useReco && !hasIncome &&
+              <p className="srl-d" style={{ margin: "8px 0 0", color: "var(--muted)" }}>Enter an income above to preview the recommended amounts.</p>}
+          </div>
+        </div>
+        <div className="set-foot">
+          <span className="set-note">{keptCount} categor{keptCount === 1 ? "y" : "ies"} selected{hasIncome ? " · amounts from 50/30/20" : ""}.</span>
+          {Button && <Button variant="ghost" size="sm" onClick={skip} disabled={busy}>Skip for now</Button>}
+          {Button && <Button variant="primary" size="sm" onClick={finish} disabled={busy}>{busy ? "Saving…" : "Finish setup"}</Button>}
+        </div>
+      </div>
+    </div>);
+}
+
 function App() {
   useClaudData();
   useEffect(() => { if (!ClaudData.ready) ClaudStore.hydrate(); }, []);
@@ -1847,6 +2080,7 @@ function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);   // first-run setup modal
   const [currency, setCurrency] = useState(CURRENCIES[0]);
   const [navOpen, setNavOpen] = useState(false);
   const [acctOpen, setAcctOpen] = useState(null);
@@ -1886,6 +2120,9 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navOpen]);
 
+  // Investments empty-state CTA → open the add-holding modal.
+  useEffect(() => { const h = () => setInvModal({ mode: "add" }); window.addEventListener("claud:add-holding", h); return () => window.removeEventListener("claud:add-holding", h); }, []);
+
   // ---- settings persistence (appearance + layout + reporting cycle) ----
   const didInitSettings = useRef(false);
   useEffect(() => {
@@ -1896,6 +2133,15 @@ function App() {
     ["dark", "surface", "accent", "density", "insightsPlacement", "recurringView", "goalsLayout", "coverStyle"].forEach((k) => { if (sv[k] !== undefined && sv[k] !== null) patch[k] = sv[k]; });
     if (Object.keys(patch).length) setTweak(patch);
     if (sv.cycleStart) setCycleStart(sv.cycleStart);
+  }, [ClaudData.ready]);
+
+  // First-run: show the setup modal once if the account hasn't been onboarded.
+  const didCheckOnboard = useRef(false);
+  useEffect(() => {
+    if (!ClaudData.ready || didCheckOnboard.current) return;
+    didCheckOnboard.current = true;
+    const sv = ClaudData.settings || {};
+    if (!sv.onboarded) setSetupOpen(true);
   }, [ClaudData.ready]);
 
   useEffect(() => {
@@ -1964,8 +2210,9 @@ function App() {
         </button>
         <span className="mobile-brand">
           <svg className="brand-logo" viewBox="0 0 256 256" fill="none" aria-hidden="true">
-            <path d="M72 188C45 188 24 167 24 140C24 116 42 96 65 93C72 61 100 40 132 40C170 40 201 68 206 105C230 109 246 130 246 152C246 172 231 188 212 188Z" fill="var(--accent)" />
-            <path d="M88 148L114 128L138 138L170 106" stroke="var(--accent-contrast)" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M80 176C53 176 32 156 32 130C32 106 49 86 72 82C80 55 104 36 132 36C166 36 194 60 200 92C221 97 236 115 236 136C236 158 218 176 196 176H80Z" fill="var(--accent)" />
+            <polyline points="94,134 120,117 139,127 170,105" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
+            <polyline points="156,105 170,105 170,121" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="side-brandname">Budget</span>
         </span>
@@ -1976,8 +2223,9 @@ function App() {
       <aside className={"sidebar" + (navOpen ? " open" : "")}>
         <div className="side-brand">
           <svg className="brand-logo" viewBox="0 0 256 256" fill="none" aria-hidden="true">
-            <path d="M72 188C45 188 24 167 24 140C24 116 42 96 65 93C72 61 100 40 132 40C170 40 201 68 206 105C230 109 246 130 246 152C246 172 231 188 212 188Z" fill="var(--accent)" />
-            <path d="M88 148L114 128L138 138L170 106" stroke="var(--accent-contrast)" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M80 176C53 176 32 156 32 130C32 106 49 86 72 82C80 55 104 36 132 36C166 36 194 60 200 92C221 97 236 115 236 136C236 158 218 176 196 176H80Z" fill="var(--accent)" />
+            <polyline points="94,134 120,117 139,127 170,105" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
+            <polyline points="156,105 170,105 170,121" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="side-brandname">Budget</span>
           <button className="drawer-close" onClick={() => setNavOpen(false)} aria-label="Close navigation">{"\u00D7"}</button>
@@ -2124,7 +2372,7 @@ function App() {
                     <span className="widget-title">Budget by category</span>
                     <span className="muted">{money(spentTotal)} spent</span>
                   </div>
-                  <div className="cat-list">
+                  <div className="cat-list cat-list--dash">
                     {CATEGORIES.map((c) => {
                     const over = c.spent > c.budget;
                     return (
@@ -2252,11 +2500,14 @@ function App() {
           <div className="placeholder">
               <Icon name="grid" className="ph-ico" />
               <h2>{tab}</h2>
-              <p>This area isn't part of the dashboard demo — the sidebar shows where it lives in Claud.</p>
+              <p>This area isn't part of the dashboard demo — the sidebar shows where it lives in ClaudBudget.</p>
             </div>
           }
         </div>
       </div>
+
+      {/* ---- First-run setup ---- */}
+      {setupOpen && <FirstRunSetup onClose={() => setSetupOpen(false)} />}
 
       {/* ---- Settings ---- */}
       {settingsOpen && <SettingsModal t={t} setTweak={setTweak} onClose={() => setSettingsOpen(false)} currency={currency} setCurrency={setCurrency} cycleStart={cycleStart} setCycleStart={setCycleStart} />}
