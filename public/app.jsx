@@ -1846,7 +1846,7 @@ function VerifyBanner() {
    recommended 50/30/20 budget from an average monthly income.
    On finish it deletes unchecked categories and (if income given) updates the
    kept categories' budgets, then flips settings.onboarded = true so it never
-   reshows. All names below are FirstRun*/Frs*-prefixed to stay unique in the
+   reshows. All names below are FirstRun- and Frs-prefixed to stay unique in the
    shared Babel scope.
    ============================================================ */
 
