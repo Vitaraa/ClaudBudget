@@ -570,7 +570,7 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className={"kpi-delta " + (dayDollar >= 0 ? "pos" : "neg")}>{dayDollar >= 0 ? "\u2191" : "\u2193"} {invSigned(dayDollar, 0)} ({invPct(dayPct, 2)}) today</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Total return</span>
+          <span className="kpi-label">Total return·</span>
           <span className={"kpi-val " + (invTotalRet >= 0 ? "pos" : "neg")}>{invCb.hasCost ? invPct(invTotalRet) : "\u2014"}</span>
           <span className={"kpi-delta " + (invTotalRetDollar >= 0 ? "pos" : "neg")}>{invCb.hasCost ? (invTotalRetDollar >= 0 ? "\u2191" : "\u2193") + " " + invSigned(invTotalRetDollar, 0) + " unrealized" : "add avg cost to track"}</span>
         </div></Card>
@@ -580,9 +580,9 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className="kpi-delta" style={{ color: "var(--muted)" }}>benchmark</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Holdings vs S&amp;P 500 · {period}</span>
-          <span className="kpi-val" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(gap)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{gap >= 0 ? "ahead of the market" : "behind the market"}</span>
+          <span className="kpi-label">vs S&amp;P 500</span>
+          <span className="kpi-val" style={{ color: yrPf - yrSp >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(yrPf - yrSp)}</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{yrPf - yrSp >= 0 ? "ahead of the market" : "behind the market"}</span>
         </div></Card>
       </div>
 
@@ -590,8 +590,8 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
       <Card widget>
         <div className="cf-hero-head">
           <div>
-            <span className="widget-eyebrow">Market performance of current holdings</span>
-            <div className="cf-hero-title">Your holdings vs the S&amp;P 500</div>
+            <span className="widget-eyebrow">Performance vs benchmark</span>
+            <div className="cf-hero-title">Your portfolio vs the S&amp;P 500</div>
           </div>
           <div className="cf-hero-right" style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <LiveTag />
@@ -600,15 +600,12 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
         </div>
 
         <div className="cmp-readout">
-          <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--accent)" }} />Holdings <b style={{ color: pfRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(pfRet)}</b></span>
+          <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--accent)" }} />Portfolio <b style={{ color: pfRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(pfRet)}</b></span>
           <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--muted)" }} />S&amp;P 500 <b>{invPct(spRet)}</b></span>
-          {invCb.hasCost &&
-            <span className="cmp-chip" title="Your actual return vs what you paid (cost basis)"><span className="cmp-dot" style={{ background: "var(--green)" }} />Your return <b style={{ color: invTotalRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(invTotalRet)}</b></span>}
-          <span className="cmp-gap" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>Current holdings {gap >= 0 ? "outpaced" : "trailed"} the market by {Math.abs(gap).toFixed(1)} pts over {period === "All" ? "2 years" : period}</span>
+          <span className="cmp-gap" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>{gap >= 0 ? "Outperforming by " : "Trailing by "}{Math.abs(gap).toFixed(1)} pts over {period === "All" ? "2 years" : period}</span>
         </div>
 
-        <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Holdings" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
-        <div className="alloc-note" style={{ marginTop: 6 }}>Shows how the securities you hold today moved over {period === "All" ? "the last 2 years" : "the last " + period} — as if held the whole time — for market context. It is not your personal return; for that, see Total return{invCb.hasCost ? " (" + invPct(invTotalRet) + ")" : ""} above.</div>
+        <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Portfolio" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
       </Card>
 
       <div className="dash-grid">
@@ -1025,4 +1022,58 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
           <div className="kpi" style={{ marginBottom: 4 }}>
             <span className="kpi-label">Market value</span>
             <span className="kpi-val">{invMoney(h.value, 2)}</span>
-            <span className={"kpi-delta " + (totalGain >= 0 ? "pos" : "neg")}>{totalGain >= 0 ? "\u2191" : "\u2193"} {in
+            <span className={"kpi-delta " + (totalGain >= 0 ? "pos" : "neg")}>{totalGain >= 0 ? "\u2191" : "\u2193"} {invSigned(totalGain, 0)} ({invPct(h.ret)}) all time</span>
+          </div>
+          <div className="ainfo-list">
+            <div className="ainfo-row"><span className="ainfo-k">Shares</span><span className="ainfo-v">{h.shares}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Avg cost / share</span><span className="ainfo-v">{invMoney(h.cost, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Cost basis</span><span className="ainfo-v">{invMoney(costBasis, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Today</span><span className="ainfo-v" style={{ color: h.day >= 0 ? "var(--green)" : "var(--red)" }}>{invSigned(dayDollar, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Portfolio weight</span><span className="ainfo-v">{(h.value / (portfolioValue || h.value) * 100).toFixed(1)}%</span></div>
+          </div>
+          <button className="inv-edit-btn" onClick={() => onEdit && onEdit(h)}><Icon name="pencil" />Edit position</button>
+        </Card>
+
+        <Card widget className="span4">
+          <div className="widget-head"><span className="widget-title">Key statistics</span><span className="muted">{h.ticker}</span></div>
+          <div className="inv-kpis">
+            <Stat k="Open" v={invMoney(open, 2)} />
+            <Stat k="Previous close" v={invMoney(prevClose, 2)} />
+            <Stat k="Day's range" v={invMoney(dayLo, 2) + " – " + invMoney(dayHi, 2)} />
+            <Stat k="52-week range" v={invMoney(wkLo, 2) + " – " + invMoney(wkHi, 2)} />
+            <Stat k="Volume" v={invVol(volume)} />
+            <Stat k="Avg. volume" v={invVol(avgVol)} />
+            <Stat k={meta.mktCap && meta.mktCap.includes("AUM") ? "Net assets" : "Market cap"} v={meta.mktCap || "\u2014"} />
+            <Stat k="P/E ratio" v={meta.pe || "\u2014"} />
+            <Stat k="Dividend yield" v={meta.yield || "\u2014"} />
+            <Stat k="Beta (5Y)" v={meta.beta || "\u2014"} />
+          </div>
+        </Card>
+      </div>
+
+      {/* About + danger zone */}
+      <div className="dash-grid">
+        <Card widget className="span4">
+          <div className="widget-head"><span className="widget-title">About {h.name}</span></div>
+          <p className="inv-about">{meta.about || (h.name + " is held in your brokerage account. Add notes or research links here.")}</p>
+        </Card>
+        <Card widget className="span2">
+          <div className="widget-head"><span className="widget-title">Manage</span></div>
+          <div className="ainfo-list">
+            <div className="ainfo-row"><span className="ainfo-k">Symbol</span><span className="ainfo-v">{h.ticker}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Asset class</span><span className="ainfo-v">{h.cls}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Last price</span><span className="ainfo-v">{invMoney(h.price, 2)}</span></div>
+          </div>
+          <div className="danger-zone">
+            <span className="dz-title">Remove</span>
+            <span className="dz-desc">Take this position out of your tracked portfolio. You can add it again later.</span>
+            <button className="btn-danger-out" onClick={() => setConfirm(true)}><Icon name="trash" />Remove position</button>
+          </div>
+        </Card>
+      </div>
+
+      {confirm && <InvDeleteModal holding={h} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); onDelete(); }} />}
+    </React.Fragment>);
+}
+
+Object.assign(window, { InvestmentsPage, InvestmentDetailPage, InvestmentModal, InvDeleteModal, INV_SEED });

@@ -570,7 +570,7 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className={"kpi-delta " + (dayDollar >= 0 ? "pos" : "neg")}>{dayDollar >= 0 ? "\u2191" : "\u2193"} {invSigned(dayDollar, 0)} ({invPct(dayPct, 2)}) today</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Total return</span>
+          <span className="kpi-label">Total return·</span>
           <span className={"kpi-val " + (invTotalRet >= 0 ? "pos" : "neg")}>{invCb.hasCost ? invPct(invTotalRet) : "\u2014"}</span>
           <span className={"kpi-delta " + (invTotalRetDollar >= 0 ? "pos" : "neg")}>{invCb.hasCost ? (invTotalRetDollar >= 0 ? "\u2191" : "\u2193") + " " + invSigned(invTotalRetDollar, 0) + " unrealized" : "add avg cost to track"}</span>
         </div></Card>
@@ -580,9 +580,9 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className="kpi-delta" style={{ color: "var(--muted)" }}>benchmark</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Holdings vs S&amp;P 500 · {period}</span>
-          <span className="kpi-val" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(gap)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{gap >= 0 ? "ahead of the market" : "behind the market"}</span>
+          <span className="kpi-label">vs S&amp;P 500</span>
+          <span className="kpi-val" style={{ color: yrPf - yrSp >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(yrPf - yrSp)}</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{yrPf - yrSp >= 0 ? "ahead of the market" : "behind the market"}</span>
         </div></Card>
       </div>
 
@@ -590,8 +590,8 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
       <Card widget>
         <div className="cf-hero-head">
           <div>
-            <span className="widget-eyebrow">Market performance of current holdings</span>
-            <div className="cf-hero-title">Your holdings vs the S&amp;P 500</div>
+            <span className="widget-eyebrow">Performance vs benchmark</span>
+            <div className="cf-hero-title">Your portfolio vs the S&amp;P 500</div>
           </div>
           <div className="cf-hero-right" style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <LiveTag />
@@ -600,15 +600,12 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
         </div>
 
         <div className="cmp-readout">
-          <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--accent)" }} />Holdings <b style={{ color: pfRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(pfRet)}</b></span>
+          <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--accent)" }} />Portfolio <b style={{ color: pfRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(pfRet)}</b></span>
           <span className="cmp-chip"><span className="cmp-dot" style={{ background: "var(--muted)" }} />S&amp;P 500 <b>{invPct(spRet)}</b></span>
-          {invCb.hasCost &&
-            <span className="cmp-chip" title="Your actual return vs what you paid (cost basis)"><span className="cmp-dot" style={{ background: "var(--green)" }} />Your return <b style={{ color: invTotalRet >= 0 ? "var(--green)" : "var(--red)" }}>{invPct(invTotalRet)}</b></span>}
-          <span className="cmp-gap" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>Current holdings {gap >= 0 ? "outpaced" : "trailed"} the market by {Math.abs(gap).toFixed(1)} pts over {period === "All" ? "2 years" : period}</span>
+          <span className="cmp-gap" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>{gap >= 0 ? "Outperforming by " : "Trailing by "}{Math.abs(gap).toFixed(1)} pts over {period === "All" ? "2 years" : period}</span>
         </div>
 
-        <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Holdings" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
-        <div className="alloc-note" style={{ marginTop: 6 }}>Shows how the securities you hold today moved over {period === "All" ? "the last 2 years" : "the last " + period} — as if held the whole time — for market context. It is not your personal return; for that, see Total return{invCb.hasCost ? " (" + invPct(invTotalRet) + ")" : ""} above.</div>
+        <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Portfolio" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
       </Card>
 
       <div className="dash-grid">

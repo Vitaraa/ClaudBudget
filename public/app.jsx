@@ -2135,14 +2135,12 @@ function App() {
     if (sv.cycleStart) setCycleStart(sv.cycleStart);
   }, [ClaudData.ready]);
 
-  // First-run: show the setup modal once if the account hasn't been onboarded.
-  const didCheckOnboard = useRef(false);
+  // First-run: open the setup modal the first time the user opens the Budget
+  // tab while not yet onboarded. The onboarded flag flips on finish/skip, so
+  // this won't reopen afterward.
   useEffect(() => {
-    if (!ClaudData.ready || didCheckOnboard.current) return;
-    didCheckOnboard.current = true;
-    const sv = ClaudData.settings || {};
-    if (!sv.onboarded) setSetupOpen(true);
-  }, [ClaudData.ready]);
+    if (tab === "Budget" && !((ClaudData.settings) || {}).onboarded) setSetupOpen(true);
+  }, [tab]);
 
   useEffect(() => {
     if (!didInitSettings.current) return;
@@ -2372,6 +2370,11 @@ function App() {
                     <span className="widget-title">Budget by category</span>
                     <span className="muted">{money(spentTotal)} spent</span>
                   </div>
+                  {CATEGORIES.length === 0 ?
+                  <button type="button" className="cat-empty-cta" onClick={() => setTab("Budget")}>
+                      Click here to set up budget categories
+                    </button> :
+
                   <div className="cat-list cat-list--dash">
                     {CATEGORIES.map((c) => {
                     const over = c.spent > c.budget;
@@ -2385,7 +2388,7 @@ function App() {
                         </div>);
 
                   })}
-                  </div>
+                  </div>}
                 </Card>
 
                 {/* Cash flow */}
@@ -2397,7 +2400,7 @@ function App() {
                       <span className="cf-leg"><span className="sw" style={{ background: "var(--red)" }} />Out</span>
                     </div>
                   </div>
-                  <CashFlow data={CASHFLOW} />
+                  <CashFlow data={CASHFLOW.slice(-6)} />
                 </Card>
 
                 {/* Recent transactions */}
@@ -2406,8 +2409,8 @@ function App() {
                     <span className="widget-title">Recent transactions</span>
                     {Button && <Button variant="link">View all</Button>}
                   </div>
-                  <div className="txn-list">
-                    {TXNS.map((x, i) =>
+                  <div className="txn-list txn-list--dash">
+                    {TXNS.slice(0, 6).map((x, i) =>
                   <div className="txn" key={i}>
                         <span className="txn-ico"><Icon name={x.icon} /></span>
                         <div className="txn-body">
@@ -2423,7 +2426,7 @@ function App() {
                 {/* Goals */}
                 <Card widget className="span2">
                   <div className="widget-head"><span className="widget-title">Savings goals</span></div>
-                  <div>
+                  <div className="goal-list--dash">
                     {dashGoals.map((g) => {
                     const pct = Math.round(g.have / g.target * 100);
                     return (

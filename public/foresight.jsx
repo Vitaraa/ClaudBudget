@@ -99,11 +99,21 @@ const FS_RETURN = 4.5;                              // real % / yr on invested b
 
 const FS_START_NW = 185381;
 
-// Base annual budget (what hits the accounts today). Income rows are take-home.
-const FS_INCOME_BASE = [
-  { cat: "Salary", amt: 72000 },
-  { cat: "Side income", amt: 6000 }
-];
+// Income now comes ENTIRELY from the user's Foresight profile (collected by the
+// first-run popup) — never fabricated. A brand-new account therefore projects
+// $0 income until the profile is filled in. The two income rows are take-home.
+// fsIncomeRows turns a profile into the Salary / Side income base used by the
+// projected-budget table and the simulation; with no profile it returns [],
+// so both income rows render blank/0.
+function fsIncomeRows(profile) {
+  if (!profile) return [];
+  const salary = Math.max(0, Math.round(Number(profile.salary) || 0));
+  const side = Math.max(0, Math.round(Number(profile.sideIncome) || 0));
+  return [
+    { cat: "Salary", amt: salary },
+    { cat: "Side income", amt: side }
+  ];
+}
 const FS_EXPENSE_BASE = [
   { cat: "Housing", amt: 19800 },
   { cat: "Food & dining", amt: 12000 },
@@ -163,10 +173,14 @@ const fsMortgage = (principal, ratePct, termYears) => {
 
 /* Build the projected-budget rows. Plans map onto rows automatically and lock
    the cells they drive; everything else takes a manual override or the base. */
-function fsBuildModel(plans, overrides, years, expenseBase) {
+function fsBuildModel(plans, overrides, years, expenseBase, incomeBase, profileRetireY) {
   const expBase = expenseBase || FS_EXPENSE_BASE;
+  // Income rows come from the profile (passed in); no profile → empty income.
+  const incBase = incomeBase || [];
   const retire = plans.find((p) => p.kind === "retirement") || null;
-  const retireY = retire ? retire.year : null;
+  // A retirement PLAN wins; otherwise fall back to the profile's retirement age
+  // (translated to a calendar year) so salary still stops at the planned age.
+  const retireY = retire ? retire.year : (profileRetireY != null ? profileRetireY : null);
   const job = plans.find((p) => p.kind === "job") || null;
   const house = plans.find((p) => p.kind === "house") || null;
 
@@ -178,7 +192,7 @@ function fsBuildModel(plans, overrides, years, expenseBase) {
 
   // ---- income rows ----
   const incomeRows = [];
-  FS_INCOME_BASE.forEach((b) => {
+  incBase.forEach((b) => {
     const cells = years.map((y) => {
       if (b.cat === "Salary") {
         if (retireY && y >= retireY) return { year: y, value: 0, locked: true };
@@ -286,7 +300,8 @@ function fsSimulate(model, plans, years, startNW) {
    PROJECTION CHART — single line, green above 0 / red below,
    with draggable plan markers.
    ============================================================ */
-function FsChart({ series, markers, onDragYear, onCommit, onClickMarker }) {
+function FsChart({ series, markers, onDragYear, onCommit, onClickMarker, age }) {
+  const fsAge = age != null ? age : FS_AGE;
   const W = 940, H = 320, padL = 60, padR = 22, padT = 22, padB = 30;
   const wrapRef = fsUseRef(null);
   const svgRef = fsUseRef(null);
@@ -425,7 +440,7 @@ function FsChart({ series, markers, onDragYear, onCommit, onClickMarker }) {
       </svg>
       {hp &&
         <div className="fs-tip" style={{ left: `${xOf(hp.year) / W * 100}%`, top: `${yOf(hp.value) / H * 100}%` }}>
-          <div className="fst-d">{hp.year} · age {FS_AGE + (hp.year - FS_NOW)}</div>
+          <div className="fst-d">{hp.year} · age {fsAge + (hp.year - FS_NOW)}</div>
           <div className="fst-v" style={{ color: hp.value < 0 ? "var(--red)" : "var(--text)" }}>{fsMoney(hp.value)}</div>
         </div>
       }
@@ -523,11 +538,11 @@ function FsModal({ draft, isNew, onField, onSave, onDelete, onClose }) {
 
 /* ============================================================
    GET-STARTED PANEL — shown when the user has NO plans yet.
-   Replaces the demo projection (KPIs + chart + budget table that
-   would otherwise render off the hardcoded FS_INCOME_BASE /
-   FS_EXPENSE_BASE) with a friendly intro and a CTA that opens this
-   page's OWN add-plan flow (the same FS_KINDS picker the toolbar
-   "+ New plan" button uses).
+   Replaces the demo projection (KPIs + chart + budget table) with a
+   friendly intro and a CTA that opens this page's OWN add-plan flow
+   (the same FS_KINDS picker the toolbar "+ New plan" button uses).
+   Income comes from the profile popup (empty until set); expenses
+   come from the live Budget. So nothing here is fabricated.
    ============================================================ */
 function FsGetStarted({ onPick }) {
   const { Card, Button } = FS;
@@ -583,6 +598,8 @@ function ForesightPage() {
   const [menu, setMenu] = fsUseState(false);
   const [rangeRow, setRangeRow] = fsUseState(null);   // { cat } → range-fill modal
   const [addRowOpen, setAddRowOpen] = fsUseState(false);
+  // First-run onboarding popup (collects age / income / retirement / lifespan).
+  const [fsOnboard, setFsOnboard] = fsUseState(false);
 
   // Expense rows mirror the live Budget categories one-for-one (monthly × 12).
   // dashCategories is the server-derived, blank-slate-correct source. Per-user
@@ -594,19 +611,41 @@ function ForesightPage() {
   const expenseBase = fsUseMemo(() => fsExpenseRows(budgetCats, hiddenRows, extraRows), [budgetCats, hiddenRows, extraRows]);
   const budgetLinked = !!(budgetCats && budgetCats.length);
 
+  // ---- Foresight profile (the first-run popup writes this) ----
+  // settings.foresightProfile = { age, salary, sideIncome, retireAge, lifeExpectancy }.
+  // No profile yet → income rows are EMPTY (no fabricated Salary/Side income) and
+  // age/lifespan fall back to the page defaults so the chart still has an axis.
+  const fsProfile = (settings.foresightProfile && typeof settings.foresightProfile === "object") ? settings.foresightProfile : null;
+  const fsOnboarded = !!settings.foresightOnboarded;
+  const fsAge = fsProfile && Number(fsProfile.age) > 0 ? Math.round(Number(fsProfile.age)) : FS_AGE;
+  const fsLife = fsProfile && Number(fsProfile.lifeExpectancy) > 0 ? Math.round(Number(fsProfile.lifeExpectancy)) : FS_LIFE;
+  // Horizon = the year the user reaches their life expectancy (min one year out).
+  const fsHorizon = FS_NOW + Math.max(1, fsLife - fsAge);
+  // Profile retirement age → calendar year salary should stop (used only when
+  // there's no explicit retirement PLAN; a plan always wins inside fsBuildModel).
+  const fsRetireY = fsProfile && Number(fsProfile.retireAge) > 0 ? FS_NOW + Math.max(0, Math.round(Number(fsProfile.retireAge)) - fsAge) : null;
+  // Income base for the projection — derived from the profile, never hardcoded.
+  const incomeBase = fsUseMemo(() => fsIncomeRows(fsProfile), [fsProfile]);
+
+  // Show the first-run popup the FIRST time Foresight mounts for a user who
+  // hasn't been onboarded. Gated on the settings flag so it appears exactly once.
+  fsUseEffect(() => {
+    if (data.ready && !fsOnboarded) setFsOnboard(true);
+  }, [data.ready, fsOnboarded]);
+
   // plans with the live drag year applied, so the whole projection moves with the dot
   const livePlans = fsUseMemo(
     () => drag ? plans.map((p) => (p.id === drag.id ? { ...p, year: drag.year } : p)) : plans,
     [plans, drag]);
 
   const horizonYears = fsUseMemo(() => {
-    const end = Math.max(FS_HORIZON, ...livePlans.map((p) => p.year || 0));
+    const end = Math.max(fsHorizon, ...livePlans.map((p) => p.year || 0));
     const out = []; for (let y = FS_NOW; y <= end; y++) out.push(y); return out;
-  }, [livePlans]);
+  }, [livePlans, fsHorizon]);
   const tableYears = fsUseMemo(() => horizonYears.filter((y) => y <= FS_TABLE_END), [horizonYears]);
 
-  const model = fsUseMemo(() => fsBuildModel(livePlans, overrides, horizonYears, expenseBase), [livePlans, overrides, horizonYears, expenseBase]);
-  const tableModel = fsUseMemo(() => fsBuildModel(livePlans, overrides, tableYears, expenseBase), [livePlans, overrides, tableYears, expenseBase]);
+  const model = fsUseMemo(() => fsBuildModel(livePlans, overrides, horizonYears, expenseBase, incomeBase, fsRetireY), [livePlans, overrides, horizonYears, expenseBase, incomeBase, fsRetireY]);
+  const tableModel = fsUseMemo(() => fsBuildModel(livePlans, overrides, tableYears, expenseBase, incomeBase, fsRetireY), [livePlans, overrides, tableYears, expenseBase, incomeBase, fsRetireY]);
   const series = fsUseMemo(() => fsSimulate(model, livePlans, horizonYears, startNW), [model, livePlans, horizonYears, startNW]);
 
   const valueAt = (yr) => { let v = series[0].value; for (const p of series) { if (p.year <= yr) v = p.value; else break; } return v; };
@@ -671,7 +710,7 @@ function ForesightPage() {
 
   // base (un-edited) annual value for a row — used when reverting after a range
   function baseAmtFor(cat) {
-    const inc = FS_INCOME_BASE.find((b) => b.cat === cat); if (inc) return inc.amt;
+    const inc = incomeBase.find((b) => b.cat === cat); if (inc) return inc.amt;
     const exp = expenseBase.find((b) => b.cat === cat); if (exp) return exp.amt;
     return 0;
   }
@@ -698,11 +737,25 @@ function ForesightPage() {
     setRangeRow(null);
   }
 
-  // ---- add / remove projected expense rows (persist in settings) ----
+  // ---- settings patch helper (follows the in-place patch + persist pattern) ----
+  // Mirrors ClaudData.settings locally for an instant re-render, then PUTs the
+  // merged keys to /api/settings (saveSettings → ClaudAPI.put). The server merges
+  // arbitrary keys, so foresightProfile / foresightOnboarded round-trip fine.
   function patchSettingsLocal(patch) {
     ClaudData.settings = Object.assign({}, ClaudData.settings, patch);
     ClaudStore.emit();
     ClaudActions.saveSettings(patch);
+  }
+  // First-run popup: persist the profile + flip the onboarded flag so it never
+  // shows again. Income now flows from this profile into the projection.
+  function saveOnboard(profile) {
+    patchSettingsLocal({ foresightProfile: profile, foresightOnboarded: true });
+    setFsOnboard(false);
+  }
+  // Skip: leave income empty but still mark onboarded so the popup is one-time.
+  function skipOnboard() {
+    patchSettingsLocal({ foresightOnboarded: true });
+    setFsOnboard(false);
   }
   function removeRow(cat) {
     if (extraRows.some((e) => e.name === cat)) {            // custom row → delete it
@@ -722,7 +775,7 @@ function ForesightPage() {
 
   const sortedMarkers = [...livePlans].sort((a, b) => a.year - b.year);
   const planSub = (p) => {
-    if (p.kind === "retirement") return `stop working in ${p.year}, age ${FS_AGE + (p.year - FS_NOW)}`;
+    if (p.kind === "retirement") return `stop working in ${p.year}, age ${fsAge + (p.year - FS_NOW)}`;
     if (p.kind === "house") return `${fsMoney(p.amount)} home in ${p.year}`;
     if (p.kind === "job") return `${fsMoney(p.amount)}/yr take-home from ${p.year}`;
     if (p.kind === "kids") return `${fsMoney(p.amount)}/yr, ${p.year}\u2013${p.end || p.year}`;
@@ -731,15 +784,17 @@ function ForesightPage() {
   };
 
   // Brand-new account with NO plans: show the get-started panel instead of a
-  // demo projection (the chart + KPIs + budget table are all driven off the
-  // hardcoded income/expense base until a real plan exists). The plan modal
-  // still mounts so the CTA can open this page's own add-plan flow. All hooks
-  // above run unconditionally, so this early return keeps hook order stable.
+  // demo projection (the chart + KPIs + budget table only fill in once a plan
+  // and/or income profile exist). The plan modal still mounts so the CTA can
+  // open this page's own add-plan flow, and the first-run profile popup mounts
+  // here too (it's the primary first-run step). All hooks above run
+  // unconditionally, so this early return keeps hook order stable.
   if (!plans.length) {
     return (
       <React.Fragment>
         <FsGetStarted onPick={openNew} />
         {modal && <FsModal draft={modal.draft} isNew={modal.isNew} onField={modalField} onSave={saveModal} onDelete={deleteModal} onClose={() => setModal(null)} />}
+        {fsOnboard && <FsOnboardModal profile={fsProfile} startNW={startNW} onSave={saveOnboard} onSkip={skipOnboard} />}
       </React.Fragment>);
   }
 
@@ -750,12 +805,12 @@ function ForesightPage() {
         <Card widget><div className="kpi">
           <span className="kpi-label">Net worth today</span>
           <span className="kpi-val">{fsMoney(startNW)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>age {FS_AGE} · {plans.length} plans active</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>age {fsAge} · {plans.length} plans active</span>
         </div></Card>
         <Card widget><div className="kpi">
-          <span className="kpi-label">Projected · {FS_HORIZON}</span>
+          <span className="kpi-label">Projected · {fsHorizon}</span>
           <span className="kpi-val" style={{ color: latest < 0 ? "var(--red)" : "var(--text)" }}>{fsMoney(latest)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>at age {FS_LIFE}</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>at age {fsLife}</span>
         </div></Card>
         <Card widget><div className="kpi">
           <span className="kpi-label">At retirement{retire ? ` · ${retire.year}` : ""}</span>
@@ -765,7 +820,7 @@ function ForesightPage() {
         <Card widget><div className="kpi">
           <span className="kpi-label">Retirement</span>
           <span className="kpi-val" style={{ color: runOut ? "var(--red)" : "var(--green)" }}>{runOut ? `Runs dry ${runOut}` : "On track"}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{retire ? (runOut ? "savings dip below zero" : `lasts through ${FS_HORIZON}`) : "add a retirement plan"}</span>
+          <span className="kpi-delta" style={{ color: "var(--muted)" }}>{retire ? (runOut ? "savings dip below zero" : `lasts through ${fsHorizon}`) : "add a retirement plan"}</span>
         </div></Card>
       </div>
 
@@ -776,9 +831,9 @@ function ForesightPage() {
             <span className="widget-eyebrow">Net worth · all plans</span>
             <div className="fs-chart-headline">
               <span className="fs-chart-val" style={{ color: latest < 0 ? "var(--red)" : "var(--text)" }}>{fsMoney(latest)}</span>
-              <span className="fs-chart-unit">projected by {FS_HORIZON}</span>
+              <span className="fs-chart-unit">projected by {fsHorizon}</span>
             </div>
-            <div className="fs-hint">{plans.length ? <React.Fragment>{"\u2195\uFE0E"} Drag any dot left or right to change its year · click it to edit</React.Fragment> : <React.Fragment>This is your base trajectory · add a life event with <b style={{ color: "var(--text)", fontWeight: 600 }}>+ New plan</b> to see it bend the line</React.Fragment>}</div>
+            <div className="fs-hint">{plans.length ? <React.Fragment>{"\u2195\uFE0E"} Drag any dot left or right to change its year · click it to edit</React.Fragment> : <React.Fragment>This is your base trajectory · add a life event with <b style={{ color: "var(--text)", fontWeight: 600 }}>+ New plan</b> to see it bend the line</React.Fragment>}{!fsProfile && <React.Fragment>{" · "}<button className="fs-addrow-link" style={{ padding: 0 }} onClick={() => setFsOnboard(true)} title="Add your income to project net worth">Add your income {"›"}</button></React.Fragment>}</div>
           </div>
           <div className="cf-hero-right">
             <div className="fs-dd">
@@ -796,7 +851,7 @@ function ForesightPage() {
           </div>
         </div>
 
-        <FsChart series={series} markers={markers}
+        <FsChart series={series} markers={markers} age={fsAge}
           onDragYear={dragYear} onCommit={commitDrag} onClickMarker={openEdit} />
 
         <ul className="fs-legend">
@@ -904,6 +959,7 @@ function ForesightPage() {
       {modal && <FsModal draft={modal.draft} isNew={modal.isNew} onField={modalField} onSave={saveModal} onDelete={deleteModal} onClose={() => setModal(null)} />}
       {rangeRow && <FsRangeModal cat={rangeRow.cat} base={baseAmtFor(rangeRow.cat)} onApply={fillRange} onClose={() => setRangeRow(null)} />}
       {addRowOpen && <FsAddRowModal onAdd={addRow} onClose={() => setAddRowOpen(false)} />}
+      {fsOnboard && <FsOnboardModal profile={fsProfile} startNW={startNW} onSave={saveOnboard} onSkip={skipOnboard} />}
     </React.Fragment>);
 }
 
@@ -969,6 +1025,94 @@ function FsAddRowModal({ onAdd, onClose }) {
           <div className="right">
             {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
             {Button && <Button variant="primary" size="sm" onClick={() => valid && onAdd(name, amt)}>Add row</Button>}
+          </div>
+        </div>
+      </section>
+    </div>);
+}
+
+/* ============================================================
+   FIRST-RUN PROFILE POPUP — shown the first time Foresight opens.
+   Collects the numbers the projection needs: current age, annual
+   salary, annual side income, retirement age, life expectancy.
+   Starting net worth is shown read-only (it comes from the user's
+   real accounts, not entered here). Saving stores the profile and
+   flips the onboarded flag; Skip leaves income empty but still
+   flips the flag, so the popup is strictly one-time.
+   Reuses the foresight modal styling (fs-overlay / fs-modal / fs-grid).
+   ============================================================ */
+function FsOnboardModal({ profile, startNW, onSave, onSkip }) {
+  const { Button } = FS;
+  const p = profile || {};
+  // Pre-fill from any existing profile; otherwise start with blank income (so we
+  // never fabricate it) and gentle age/retirement/lifespan defaults.
+  const [fsAgeV, setFsAgeV] = fsUseState(p.age != null && p.age !== "" ? String(p.age) : String(FS_AGE));
+  const [fsSalaryV, setFsSalaryV] = fsUseState(p.salary != null && p.salary !== "" ? String(p.salary) : "");
+  const [fsSideV, setFsSideV] = fsUseState(p.sideIncome != null && p.sideIncome !== "" ? String(p.sideIncome) : "");
+  const [fsRetireV, setFsRetireV] = fsUseState(p.retireAge != null && p.retireAge !== "" ? String(p.retireAge) : "65");
+  const [fsLifeV, setFsLifeV] = fsUseState(p.lifeExpectancy != null && p.lifeExpectancy !== "" ? String(p.lifeExpectancy) : String(FS_LIFE));
+
+  // Escape / backdrop = Skip (still flips the onboarded flag, so one-time).
+  fsUseEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onSkip(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onSkip]);
+
+  const numField = (label, value, set, opts) => {
+    opts = opts || {};
+    return (
+      <label className={"fs-field" + (opts.full ? " full" : "")}>
+        <span>{label}</span>
+        <input type="number" min="0" step={opts.step || "1"} value={value}
+          placeholder={opts.placeholder || ""}
+          onChange={(e) => set(e.target.value)} autoFocus={opts.autoFocus} />
+      </label>
+    );
+  };
+
+  function handleSave() {
+    const toNum = (v) => (v === "" || v == null ? 0 : Math.max(0, Math.round(Number(v) || 0)));
+    onSave({
+      age: toNum(fsAgeV),
+      salary: toNum(fsSalaryV),
+      sideIncome: toNum(fsSideV),
+      retireAge: toNum(fsRetireV),
+      lifeExpectancy: toNum(fsLifeV)
+    });
+  }
+
+  return (
+    <div className="fs-overlay" onMouseDown={onSkip}>
+      <section className="fs-modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <div className="fs-modal-head">
+          <span className="fs-modal-title">
+            <span className="fs-ico"><FsIcon kind="income" size={20} /></span>
+            Set up your Foresight
+          </span>
+          <button className="fs-modal-close" onClick={onSkip} aria-label="Close">{"×"}</button>
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, margin: "0 0 14px" }}>
+          Tell us a little about your income and timeline so we can project your net worth.
+          Your expenses come from your Budget, and today{"’"}s net worth from your real accounts.
+        </p>
+        <div className="fs-grid">
+          {numField("Current age", fsAgeV, setFsAgeV, { autoFocus: true })}
+          {numField("Retirement age", fsRetireV, setFsRetireV)}
+          {numField("Annual salary (take-home)", fsSalaryV, setFsSalaryV, { full: true, placeholder: "e.g. 60000" })}
+          {numField("Annual side income", fsSideV, setFsSideV, { full: true, placeholder: "0" })}
+          {numField("Life expectancy (age)", fsLifeV, setFsLifeV)}
+          <label className="fs-field">
+            <span>Starting net worth</span>
+            <input type="text" value={fsMoney(Number(startNW) || 0)} readOnly disabled
+              title="Calculated from your real accounts" />
+          </label>
+        </div>
+        <div className="fs-modal-foot">
+          <span className="fs-foot-note">Skip to leave income blank {"—"} you can add it any time.</span>
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onSkip}>Skip</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={handleSave}>Save & project</Button>}
           </div>
         </div>
       </section>
