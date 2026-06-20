@@ -228,20 +228,59 @@ function txParseAmount(raw) {
   return neg ? -n : n;
 }
 
-/* ---- keyword categoriser (imported rows are flagged for review anyway) ---- */
+/* ---- keyword categoriser ---------------------------------------------------
+   A merchant that matches one of these rules is categorised with confidence, so
+   it does NOT need a human review on import. Anything that matches nothing here
+   (and has no usable bank spend-category) falls through to the review queue. */
 const TX_CAT_RULES = [
-  [/(grocer|market|whole foods|trader joe|safeway|kroger|loblaw|metro|costco|walmart|aldi|sobeys|no frills|superstore|save[- ]?on)/i, "Groceries", "cart"],
-  [/(coffee|caf[eé]|starbucks|restaurant|dining|pizza|mcdonald|uber eats|doordash|grubhub|skip|tim hortons|\bbar\b|\bpub\b|bistro|grill|sushi)/i, "Dining", "coffee"],
-  [/(uber|lyft|shell|esso|petro|chevron|\bgas\b|fuel|transit|parking|presto|via rail|\bair\b|airlines|train)/i, "Transport", "fuel"],
+  [/(grocer|market|whole foods|trader joe|safeway|kroger|loblaw|metro|costco|walmart|aldi|sobeys|no frills|superstore|save[- ]?on|foody)/i, "Groceries", "cart"],
+  [/(coffee|caf[eé]|starbucks|restaurant|dining|pizza|mcdonald|uber eats|doordash|grubhub|skip|tim hortons|\bbar\b|\bpub\b|bistro|grill|sushi|hotpot|\btea\b)/i, "Dining", "coffee"],
+  [/(uber|lyft|shell|esso|petro|chevron|\bgas\b|fuel|transit|parking|presto|via rail|\bair\b|airlines|train|impark)/i, "Transport", "fuel"],
   [/(netflix|spotify|disney|hulu|prime video|youtube premium|subscription|patreon|icloud|dropbox|adobe|notion|openai|claude)/i, "Subscriptions", "music"],
   [/(hydro|electric|water|rogers|bell|telus|fido|koodo|at&t|verizon|comcast|internet|wireless|utility|utilit)/i, "Utilities", "bag"],
   [/(rent|mortgage|landlord|property|strata|condo fee|housing)/i, "Housing", "bank"],
-  [/(amazon|target|\bstore\b|\bshop\b|best buy|home depot|ikea|pharmaprix|shoppers|walgreens|cvs|etsy|aliexpress)/i, "Shopping", "bag"]
+  [/(amazon|target|\bstore\b|\bshop\b|best buy|home depot|ikea|pharmaprix|shoppers|walgreens|cvs|etsy|aliexpress|apple)/i, "Shopping", "bag"]
 ];
 function txGuessCat(name) {
   const s = String(name || "");
-  for (const r of TX_CAT_RULES) if (r[0].test(s)) return { cat: r[1], icon: r[2] };
-  return { cat: "Shopping", icon: "bag" };
+  for (const r of TX_CAT_RULES) if (r[0].test(s)) return { cat: r[1], icon: r[2], matched: true };
+  return { cat: "Shopping", icon: "bag", matched: false };
+}
+
+/* ---- bank-provided spend categories ----------------------------------------
+   Some issuers (e.g. CIBC) print their own spend-category beside each charge;
+   when the PDF is flattened it bleeds into the merchant text. We detect it so we
+   can (a) strip it out of the name and (b) reuse it as a categorisation hint.
+   A `null` target means the bank's bucket is too broad to map confidently, so
+   such rows stay in the review queue. */
+const TX_BANK_CATS = [
+  [/\bretail and grocery\b/i, "Groceries"],
+  [/\brestaurants?\b/i, "Dining"],
+  [/\btransportation\b/i, "Transport"],
+  [/\bhome and office improvements?\b/i, "Shopping"],
+  [/\bpersonal and household expenses?\b/i, "Shopping"],
+  [/\bhealth and education\b/i, "Shopping"],
+  [/\bprofessional and financial services\b/i, null],
+  [/\bhotel,?\s*entertainment and recreation\b/i, null],
+  [/\bforeign currency transactions?\b/i, null],
+  [/\bother transactions?\b/i, null]
+];
+function txStripBankCat(name) {
+  let s = String(name || ""), cat = null, mapped = false;
+  for (const [re, target] of TX_BANK_CATS) {
+    if (re.test(s)) { s = s.replace(re, " ").replace(/\s{2,}/g, " ").trim(); cat = target; mapped = target != null; break; }
+  }
+  return { name: s, bankCat: cat, bankMapped: mapped };
+}
+/* Resolve a final category + a confidence flag. Keyword match wins (most
+   specific), then a mapped bank category, else the generic default — and only
+   that last case is "not confident" → flagged for review. */
+function txResolveCat(rawName, cleanName, amt, bankCat, bankMapped) {
+  if (amt > 0) return { cat: "Income", icon: "income", confident: true };
+  const kw = txGuessCat((cleanName || "") + " " + (rawName || ""));
+  if (kw.matched) return { cat: kw.cat, icon: kw.icon, confident: true };
+  if (bankMapped && bankCat) return { cat: bankCat, icon: TX_ICON[bankCat] || "bag", confident: true };
+  return { cat: "Shopping", icon: "bag", confident: false };
 }
 
 /* ---- merchant-name cleaner -------------------------------------------------
@@ -258,8 +297,23 @@ const TX_DATE_LEAD = new RegExp(
     "|\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?(?:\\s+\\d{2,4})?" +
   ")\\b[\\s,]*", "i");
 const TX_TIME_LEAD = /^\d{1,2}:\d{2}(?::\d{2})?\s+/;
-const TX_PREFIX = /^(?:(?:sq|tst|sp|pp|paypal|dd|ec)\s?\*\s*|(?:pos(?: purchase| debit)?|point of sale|purchase|payment|pre-?authorized|pre-?auth|recurring|debit card|credit card|debit|visa|mastercard|amex|interac e-?transfer|interac|e-?transfer|bill payment|web pmt|ach|eft)[\s:#-]+)/i;
-const TX_KEEP_UPPER = new Set(["KFC", "BP", "IGA", "BMO", "RBC", "CIBC", "HSBC", "TD", "LCBO", "IKEA", "IHOP", "UPS", "DHL", "KPMG", "AMC", "GNC", "CVS", "DSW", "H&M", "A&W", "BBQ", "ATM", "PC"]);
+const TX_PREFIX = /^(?:(?:sq|tst|sp|pp|paypal|dd|ec)\s?\*\s*|(?:sp|sq|tst)\s+(?=[a-z0-9])|(?:pos(?: purchase| debit)?|point of sale|purchase|payment|pre-?authorized|pre-?auth|recurring|debit card|credit card|debit|visa|mastercard|amex|interac e-?transfer|interac|e-?transfer|bill payment|web pmt|ach|eft)[\s:#-]+)/i;
+const TX_KEEP_UPPER = new Set(["KFC", "BP", "IGA", "BMO", "RBC", "CIBC", "HSBC", "TD", "LCBO", "IKEA", "IHOP", "UPS", "DHL", "KPMG", "AMC", "GNC", "CVS", "DSW", "H&M", "A&W", "BBQ", "ATM", "PC", "ICBC", "AMZN"]);
+/* known-merchant dictionary: messy statement descriptors → a clean display name.
+   First match wins. This is the local-only "lookup" — no network, fully private. */
+const TX_MERCHANTS = [
+  [/wal-?mart|walmart/i, "Walmart"], [/\bamzn\b|amazon/i, "Amazon"], [/apple\.?com|apple\s*bill|itunes/i, "Apple"],
+  [/aliexpress/i, "AliExpress"], [/\bpaypal\b/i, "PayPal"], [/uber\s*eats/i, "Uber Eats"], [/\buber\b/i, "Uber"],
+  [/\blyft\b/i, "Lyft"], [/netflix/i, "Netflix"], [/spotify/i, "Spotify"], [/disney\s*\+?/i, "Disney+"],
+  [/tim\s*hortons?/i, "Tim Hortons"], [/mcdonald'?s?/i, "McDonald's"], [/starbucks/i, "Starbucks"], [/costco/i, "Costco"],
+  [/canadian tire/i, "Canadian Tire"], [/canada computers/i, "Canada Computers"], [/\bicbc\b/i, "ICBC"], [/impark/i, "Impark"],
+  [/\bchevron\b|^chv\d|\bchv\b/i, "Chevron"], [/\bshell\b/i, "Shell"], [/\besso\b/i, "Esso"], [/petro[- ]?can/i, "Petro-Canada"],
+  [/cineplex/i, "Cineplex"], [/\bgoogle\b/i, "Google"], [/\bmicrosoft\b|msft/i, "Microsoft"], [/\bopenai\b/i, "OpenAI"],
+  [/anthropic|\bclaude\b/i, "Anthropic"], [/wheelwiz/i, "WheelWiz"], [/superstore/i, "Superstore"], [/loblaws?/i, "Loblaws"],
+  [/save[- ]?on[- ]?foods/i, "Save-On-Foods"], [/\bt&t\b/i, "T&T Supermarket"], [/foody world/i, "Foody World"],
+  [/cashback|remise en argent/i, "Cashback"]
+];
+function txMerchantAlias(s) { for (const [re, name] of TX_MERCHANTS) if (re.test(s)) return name; return null; }
 function txIsNoiseToken(t) {
   if (!t) return false;
   if (/[#*]/.test(t)) return true;                       // store#, masked or processor refs
@@ -275,6 +329,7 @@ function txTitleCaseWord(w) {
 }
 function txCleanMerchant(raw) {
   let s = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+  s = s.replace(/^[^A-Za-z0-9(]+/, "").trim();          // strip leading symbols (Ý, *, etc.)
   if (!s) return "Transaction";
   const original = s;
   // peel leading dates / times / processor prefixes (in any order, repeatedly)
@@ -285,19 +340,27 @@ function txCleanMerchant(raw) {
     if (TX_PREFIX.test(s)) s = s.replace(TX_PREFIX, "").trim();
     if (s === before) break;
   }
+  // a known merchant short-circuits all the structural cleanup
+  const alias = txMerchantAlias(s);
+  if (alias) return alias;
   // the real merchant name leads on card descriptors -> keep up to the first noise token
   const toks = s.split(" ");
   const kept = [];
   for (const t of toks) { if (txIsNoiseToken(t)) break; kept.push(t); }
   s = kept.length ? kept.join(" ") : toks.filter((t) => !txIsNoiseToken(t)).join(" ");
-  // drop trailing country, then a trailing province/state code
+  // drop trailing country, then a trailing province/state code and the city before it
   for (let i = 0; i < 2; i++) s = s.replace(/\s+(?:ca|can|canada|usa|us|united states)$/i, "").trim();
-  for (let i = 0; i < 2; i++) s = s.replace(new RegExp("\\s+(?:" + TX_REGION + ")$"), "").trim();
-  s = s.replace(/\s{2,}/g, " ").replace(/^[\s,.*#-]+|[\s,.*#-]+$/g, "").trim();
+  let hadProv = false;
+  const provRe = new RegExp("\\s+(?:" + TX_REGION + ")$");   // uppercase only → won't eat "in"/"or"
+  for (let i = 0; i < 2; i++) { if (provRe.test(s)) { s = s.replace(provRe, "").trim(); hadProv = true; } }
+  if (hadProv) {  // the token right before a province code is the city → drop it (unless it's the whole name)
+    const cityStripped = s.replace(/\s+[A-Za-z][A-Za-z'’.\-]+$/, "").trim();
+    if (cityStripped && cityStripped.replace(/[^A-Za-z]/g, "").length >= 2) s = cityStripped;
+  }
+  s = s.replace(/\.(?:com|ca|net|org|io|co|biz|us|app|store|inc)\b.*$/i, "").trim();   // drop TLD + tail (APPLE.COM/BILL → APPLE)
+  s = s.replace(/\s{2,}/g, " ").replace(/^[\s,.*#\-\/]+|[\s,.*#\-\/]+$/g, "").trim();
   if (!s) s = original.replace(/[#*]+/g, " ").replace(/\s{2,}/g, " ").trim();
-  const letters = s.replace(/[^A-Za-z]/g, "");
-  if (letters && letters === letters.toUpperCase()) s = s.split(" ").map(txTitleCaseWord).join(" ");
-  s = s.replace(/\.(com|ca|net|org|io|co|biz|us|app|store)\b/i, (m) => m.toLowerCase());
+  s = s.split(" ").map(txTitleCaseWord).join(" ");          // tidy casing (Foody World, Mr. Bro Korean Bistro…)
   return s || "Transaction";
 }
 
@@ -443,13 +506,32 @@ function txParseOFX(text) {
   });
   return out;
 }
+/* Lines that are statement summary / payment-slip fields, never real charges. */
+/* Note: "new balance" is intentionally excluded — it collides with the shoe
+   brand. Real "new balance" summary lines carry no date, so the date filter
+   already drops them. */
+const TX_STMT_SKIP = /\b(?:minimum payment|amount due|previous balance|statement balance|outstanding balance|total balance|balance due|balance forward|opening balance|closing balance|credit limit|available credit|available funds|cash advance limit|payment due|amount enclosed|total payment|total for|total charges|total credits|interest charge|interest rate|annual interest|annual fee|finance charge|grace period|past due|over[- ]?limit|payment received|paiement|montant d[uû])\d*\b/i;   // \d* tolerates footnote superscripts (e.g. "Amount Due1")
+/* The charge table almost always opens with a column-header row… */
+const TX_SECTION_START = /(?:\bdescription\b[\s\S]*\bamount\b|\bdate\b[\s\S]*\bdescription\b|your new charges|transactions?\s+(?:detail|history|from)|trans(?:action)?\s+date)/i;
+/* …and closes with a per-card total or the page's legal blurb. */
+const TX_SECTION_END = /\b(?:total for|information about your|how we charge|important information|payment options|interest charges? on)\b/i;
 function txParsePdfLines(lines) {
   const out = [];
   let yearHint = new Date().getFullYear();
   for (const l of lines) { const m = l.match(/(20\d{2})/); if (m) { yearHint = +m[1]; break; } }
   const dateRe = /(\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{4})?)/i;
   const moneyRe = /\(?-?\$?\s?\d[\d,]*\.\d{2}\)?-?/g;
+  // Only treat lines inside a transaction section as charges. If the document
+  // never declares a section header (some exports don't), fall back to scanning
+  // every line so simpler statements don't regress.
+  const hasSection = lines.some((l) => TX_SECTION_START.test(l));
+  let inSection = !hasSection;
   for (const line of lines) {
+    if (hasSection) {
+      if (!inSection) { if (TX_SECTION_START.test(line)) inSection = true; continue; }
+      if (TX_SECTION_END.test(line)) { inSection = false; continue; }
+    }
+    if (TX_STMT_SKIP.test(line)) continue;                  // summary / payment-slip line
     const dm = line.match(dateRe);
     if (!dm) continue;
     const date = txParseDate(dm[0], yearHint);
@@ -458,10 +540,17 @@ function txParsePdfLines(lines) {
     if (!monies || !monies.length) continue;
     const amt = txParseAmount(monies[monies.length - 1]);   // rightmost money = txn amount (tune per bank)
     if (amt == null) continue;
-    let name = line.replace(dm[0], "");
-    monies.forEach((mm) => { name = name.replace(mm, ""); });
-    name = name.replace(/\s+/g, " ").trim().replace(/^[\-–·,\s]+|[\-–·,\s]+$/g, "");
-    out.push({ date, name: name || "Transaction", amt });
+    // recover the payee: strip money first (so a date isn't nicked out of the
+    // decimals), then peel the leading trans/post date(s), then the bank category.
+    let name = line;
+    monies.forEach((mm) => { name = name.replace(mm, " "); });
+    for (let i = 0; i < 3; i++) { const b = name; if (TX_DATE_LEAD.test(name)) name = name.replace(TX_DATE_LEAD, "").trim(); if (name === b) break; }
+    const bc = txStripBankCat(name);
+    name = bc.name.replace(/\s+/g, " ").trim().replace(/^[\-–·,\s]+|[\-–·,\s]+$/g, "");
+    // A real charge has a payee. Bare "date + amount" rows (e.g. the payment slip
+    // "Jun 04, 2026  $10.00") have no letters left → skip them.
+    if ((name.match(/[A-Za-z]/g) || []).length < 2) continue;
+    out.push({ date, name, amt, bankCat: bc.bankCat, bankMapped: bc.bankMapped });
   }
   return out;
 }
@@ -565,8 +654,12 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
   /* derive a preview row from a parsed transaction, given the chosen orientation */
   function txRowFrom(t, flip, id) {
     const amt = flip ? -t.amt : t.amt;
-    const g = amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(t.name);
-    return { id: id || txNextId(), name: txCleanMerchant(t.name), rawAmt: t.amt, cat: g.cat, icon: g.icon, amt, date: t.date, include: !txIsDuplicate(t.date, amt), dup: txIsDuplicate(t.date, amt) };
+    const clean = txCleanMerchant(t.name);
+    const r = txResolveCat(t.name, clean, amt, t.bankCat, t.bankMapped);
+    const dup = txIsDuplicate(t.date, amt);
+    return { id: id || txNextId(), name: clean, rawName: t.name, rawAmt: t.amt,
+             bankCat: t.bankCat, bankMapped: t.bankMapped, cat: r.cat, icon: r.icon,
+             confident: r.confident, amt, date: t.date, include: !dup, dup };
   }
 
   /* ---- statement: parse the real file ---- */
@@ -599,8 +692,8 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
       const flip = txStatementFlip(s.rows.map((r) => ({ amt: r.rawAmt })), isCredit);
       const rows = s.rows.map((r) => {
         const amt = flip ? -r.rawAmt : r.rawAmt;
-        const g = amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(r.name);
-        return { ...r, amt, cat: g.cat, icon: g.icon, dup: txIsDuplicate(r.date, amt) };
+        const rr = txResolveCat(r.rawName, r.name, amt, r.bankCat, r.bankMapped);
+        return { ...r, amt, cat: rr.cat, icon: rr.icon, confident: rr.confident, dup: txIsDuplicate(r.date, amt) };
       });
       return { ...s, rows };
     });
@@ -661,8 +754,11 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
       items = stmtSel.map((r) => ({
         name: r.name, cat: r.cat, amt: r.amt, date: r.date, day: txDayLabel(r.date),
         account, icon: r.icon,
-        // statement rows arrive auto-categorized by our parser — flag them for a quick human check
-        review: true, reason: r.dup ? "Imported from statement · possible duplicate" : "Imported from statement"
+        // Only surface rows we're genuinely unsure about: an uncertain category or
+        // a possible duplicate. Confidently-categorised rows import without a flag.
+        review: (!r.confident) || r.dup,
+        reason: r.dup ? "Possible duplicate · same day & amount as an existing transaction"
+              : (!r.confident ? "Couldn’t confidently categorize · please confirm the category" : "")
       }));
     } else {
       items = rcptReady.map((r) => {
