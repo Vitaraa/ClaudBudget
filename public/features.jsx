@@ -59,10 +59,10 @@ const ftMonthlyCost = (it) => it.cadence === "annual" ? it.amount / 12 : it.amou
 /* ---- live recurring helpers (server shape: {cadence, next_date, account_id}) ---- */
 const ftParseISO = (iso) => { const d = new Date(String(iso || "") + "T00:00:00"); return isNaN(d) ? null : d; };
 /* yearly multiplier per cadence: how many charges land in a year */
-const FT_CAD_PER_YEAR = { weekly: 52, monthly: 12, quarterly: 4, yearly: 1, annual: 1 };
+const FT_CAD_PER_YEAR = { weekly: 52, biweekly: 26, monthly: 12, quarterly: 4, yearly: 1, annual: 1 };
 const ftPerYear = (it) => (Number(it.amount) || 0) * (FT_CAD_PER_YEAR[it.cadence] != null ? FT_CAD_PER_YEAR[it.cadence] : 12);
 const ftPerMonth = (it) => ftPerYear(it) / 12;
-const ftCadLabel = (c) => ({ weekly: "weekly", monthly: "monthly", quarterly: "quarterly", yearly: "yearly", annual: "yearly" }[c] || "monthly");
+const ftCadLabel = (c) => ({ weekly: "weekly", biweekly: "biweekly", monthly: "monthly", quarterly: "quarterly", yearly: "yearly", annual: "yearly" }[c] || "monthly");
 /* next charge date for a live item: prefer its stored next_date; fall back to FT_REF. */
 const ftLiveNext = (it) => ftParseISO(it.next_date) || ftStrip(FT_REF);
 
@@ -872,7 +872,7 @@ function GoalModal({ modal, api, onClose }) {
 
 /* ---- add / edit / delete a recurring item ---- */
 const FT_REC_ICONS = ["home", "bag", "phone", "wifi", "music", "book", "shield", "dumbbell", "coffee", "fuel", "cart", "bank"];
-const FT_REC_CADENCES = ["weekly", "monthly", "quarterly", "yearly"];
+const FT_REC_CADENCES = ["weekly", "biweekly", "monthly", "quarterly", "yearly"];
 const ftTodayISO = () => { const d = FT_REF; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
 function RecurringModal({ modal, onClose }) {

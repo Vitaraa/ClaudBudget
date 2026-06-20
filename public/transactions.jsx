@@ -76,7 +76,7 @@ function AddTransactionModal({ accounts = [], onClose, onAdd }) {
       <div className="fs-modal" role="dialog" aria-modal="true" aria-label="Add transaction">
         <div className="fs-modal-head">
           <span className="fs-modal-title"><span className="fs-ico"><Icon name={TX_ICON[isIncome ? "Income" : cat] || "bag"} /></span>Add transaction</span>
-          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"\u00D7"}</button>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
         </div>
 
         <div className="fs-grid">
@@ -131,31 +131,291 @@ Object.assign(window, { AddTransactionModal });
 
 /* ============================================================
    Claud — Import flow (statements + receipts)
-   A statement (PDF / CSV / OFX) is "scanned" into a reviewable
-   list of detected transactions; a receipt image is "read" into
-   a single editable transaction with the photo attached. Both
-   funnel through onImport(items[]) — the same store the add-
-   transaction modal writes to. Files never leave the browser.
+   A statement (PDF / CSV / OFX) is parsed locally into a
+   reviewable list of REAL detected transactions; a receipt image
+   is read with on-device OCR into a single editable transaction
+   with the photo attached. Both funnel through onImport(items[]) —
+   the same store the add-transaction modal writes to. Files never
+   leave the browser (parsing + OCR run client-side).
    ============================================================ */
-const TX_STMT_POOL = [
-  { name: "Payroll deposit",     cat: "Income",        amt:  2180.00, icon: "income" },
-  { name: "Trader Joe's",        cat: "Groceries",     amt:   -68.15, icon: "cart" },
-  { name: "Shell",               cat: "Transport",     amt:   -52.40, icon: "fuel" },
-  { name: "Hydro One",           cat: "Utilities",     amt:   -94.30, icon: "bag" },
-  { name: "Netflix",             cat: "Subscriptions", amt:   -16.49, icon: "music" },
-  { name: "Blue Bottle Coffee",  cat: "Dining",        amt:    -6.85, icon: "coffee" },
-  { name: "Amazon",              cat: "Shopping",      amt:   -39.99, icon: "bag" },
-  { name: "Rogers",              cat: "Utilities",     amt:   -85.00, icon: "bag" },
-  { name: "Uber",                cat: "Transport",     amt:   -23.70, icon: "fuel" },
-  { name: "Whole Foods Market",  cat: "Groceries",     amt:   -54.12, icon: "cart" }
+
+/* ---- lazy CDN loader: tries each url until one loads ---- */
+const TX_CDN = {};
+function txLoadScript(key, urls) {
+  if (TX_CDN[key]) return TX_CDN[key];
+  TX_CDN[key] = new Promise((resolve, reject) => {
+    let i = 0;
+    const tryNext = () => {
+      if (i >= urls.length) { reject(new Error("Could not load " + key)); return; }
+      const s = document.createElement("script");
+      s.src = urls[i++];
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => { s.remove(); tryNext(); };
+      document.head.appendChild(s);
+    };
+    tryNext();
+  });
+  return TX_CDN[key];
+}
+const TX_PDFJS_VER = "3.11.174";
+function txLoadPdfJs() {
+  return txLoadScript("pdfjs", [
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@" + TX_PDFJS_VER + "/build/pdf.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/" + TX_PDFJS_VER + "/pdf.min.js"
+  ]).then(() => {
+    const lib = window.pdfjsLib;
+    if (!lib) throw new Error("pdf.js unavailable");
+    try {
+      lib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@" + TX_PDFJS_VER + "/build/pdf.worker.min.js";
+    } catch (e) {}
+    return lib;
+  });
+}
+function txLoadTesseract() {
+  return txLoadScript("tesseract", [
+    "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"
+  ]).then(() => {
+    if (!window.Tesseract) throw new Error("Tesseract unavailable");
+    return window.Tesseract;
+  });
+}
+
+/* ---- value parsers (shared by every statement format) ---- */
+const TX_MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function txISO(y, mo, da) {
+  if (!y || !mo || !da || mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+  return y + "-" + String(mo).padStart(2, "0") + "-" + String(da).padStart(2, "0");
+}
+/* parse a date in many common statement formats → ISO yyyy-mm-dd (or null) */
+function txParseDate(raw, yearHint) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const Y = yearHint || new Date().getFullYear();
+  let m;
+  if ((m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/))) return txISO(+m[1], +m[2], +m[3]);   // ISO
+  if ((m = s.match(/^(\d{4})(\d{2})(\d{2})/))) return txISO(+m[1], +m[2], +m[3]);                     // OFX yyyymmdd
+  if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/))) {                            // mm/dd[/yy] or dd/mm
+    let a = +m[1], b = +m[2], y = m[3] != null ? +m[3] : Y;
+    if (y < 100) y += 2000;
+    let mo, da;
+    if (a > 12 && b <= 12) { da = a; mo = b; } else { mo = a; da = b; }   // default North-American mm/dd
+    return txISO(y, mo, da);
+  }
+  const mon = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)";
+  if ((m = s.match(new RegExp("^" + mon + "[a-z]*\\.?\\s+(\\d{1,2})(?:,?\\s*(\\d{4}))?$", "i"))))      // Mon DD, YYYY
+    return txISO(m[3] ? +m[3] : Y, TX_MON[m[1].toLowerCase()] + 1, +m[2]);
+  if ((m = s.match(new RegExp("^(\\d{1,2})\\s+" + mon + "[a-z]*\\.?(?:\\s+(\\d{4}))?$", "i"))))        // DD Mon YYYY
+    return txISO(m[3] ? +m[3] : Y, TX_MON[m[2].toLowerCase()] + 1, +m[1]);
+  return null;
+}
+/* parse a money string → signed number (handles $, commas, (parens)=neg, trailing -, DR/CR) */
+function txParseAmount(raw) {
+  if (raw == null) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) neg = true;                 // (12.34) → negative
+  if (/-\s*$/.test(s) || /^-/.test(s)) neg = true;    // leading/trailing minus
+  if (/\bDR\b/i.test(s)) neg = true;
+  if (/\bCR\b/i.test(s)) neg = false;
+  s = s.replace(/[^0-9.]/g, "");
+  if (!s || isNaN(parseFloat(s))) return null;
+  const n = parseFloat(s);
+  return neg ? -n : n;
+}
+
+/* ---- keyword categoriser (imported rows are flagged for review anyway) ---- */
+const TX_CAT_RULES = [
+  [/(grocer|market|whole foods|trader joe|safeway|kroger|loblaw|metro|costco|walmart|aldi|sobeys|no frills|superstore|save[- ]?on)/i, "Groceries", "cart"],
+  [/(coffee|caf[eé]|starbucks|restaurant|dining|pizza|mcdonald|uber eats|doordash|grubhub|skip|tim hortons|\bbar\b|\bpub\b|bistro|grill|sushi)/i, "Dining", "coffee"],
+  [/(uber|lyft|shell|esso|petro|chevron|\bgas\b|fuel|transit|parking|presto|via rail|\bair\b|airlines|train)/i, "Transport", "fuel"],
+  [/(netflix|spotify|disney|hulu|prime video|youtube premium|subscription|patreon|icloud|dropbox|adobe|notion|openai|claude)/i, "Subscriptions", "music"],
+  [/(hydro|electric|water|rogers|bell|telus|fido|koodo|at&t|verizon|comcast|internet|wireless|utility|utilit)/i, "Utilities", "bag"],
+  [/(rent|mortgage|landlord|property|strata|condo fee|housing)/i, "Housing", "bank"],
+  [/(amazon|target|\bstore\b|\bshop\b|best buy|home depot|ikea|pharmaprix|shoppers|walgreens|cvs|etsy|aliexpress)/i, "Shopping", "bag"]
 ];
-const TX_RCPT_POOL = [
-  { name: "Trader Joe's",       cat: "Groceries", amt: 41.86, icon: "cart" },
-  { name: "Pharmaprix",         cat: "Shopping",  amt: 23.40, icon: "bag" },
-  { name: "Le Petit Café",      cat: "Dining",    amt: 18.75, icon: "coffee" },
-  { name: "Esso",               cat: "Transport", amt: 61.20, icon: "fuel" },
-  { name: "The Home Depot",     cat: "Shopping",  amt: 87.34, icon: "bag" }
-];
+function txGuessCat(name) {
+  const s = String(name || "");
+  for (const r of TX_CAT_RULES) if (r[0].test(s)) return { cat: r[1], icon: r[2] };
+  return { cat: "Shopping", icon: "bag" };
+}
+
+/* ---- duplicate detection: same date + same |amount| as an existing txn ---- */
+function txExistingTxns() {
+  const d = window.ClaudData;
+  return (d && Array.isArray(d.transactions)) ? d.transactions : [];
+}
+function txIsDuplicate(date, amt) {
+  if (!date || amt == null || isNaN(amt)) return false;
+  const cents = Math.round(Math.abs(amt) * 100);
+  return txExistingTxns().some((t) => {
+    const td = t.date || t.day;
+    const ta = t.amt != null ? t.amt : t.amount;
+    return td === date && ta != null && Math.round(Math.abs(ta) * 100) === cents;
+  });
+}
+
+/* ---- statement parsers: CSV / OFX-QFX / PDF ---- */
+function txCSVLine(line, delim) {
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === delim) { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+function txParseCSV(text) {
+  const raw = String(text || "").replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim().length);
+  if (!raw.length) return [];
+  const head = raw[0];
+  const count = (ch) => (head.split(ch).length - 1);
+  const delim = count(";") > count(",") ? ";" : count("\t") > count(",") ? "\t" : ",";
+  const rows = raw.map((l) => txCSVLine(l, delim));
+  const hdr = rows[0].map((h) => h.toLowerCase());
+  const find = (...keys) => hdr.findIndex((h) => keys.some((k) => h.includes(k)));
+  let di = find("date", "posted"), ai = find("amount", "amt"),
+      ci = find("description", "payee", "name", "memo", "details", "narration", "merchant"),
+      debit = find("debit", "withdraw", "money out", "outflow", "paid out"),
+      credit = find("credit", "deposit", "money in", "inflow", "paid in");
+  const hasHeader = di >= 0 || ai >= 0 || ci >= 0 || debit >= 0 || credit >= 0;
+  let body = hasHeader ? rows.slice(1) : rows;
+  if (!hasHeader) {
+    // infer columns by content
+    const ncol = Math.max.apply(null, rows.map((r) => r.length));
+    let bd = -1, bds = -1, ba = -1, bas = -1, bt = -1, btl = -1;
+    for (let c = 0; c < ncol; c++) {
+      let ds = 0, as = 0, tl = 0;
+      for (const r of rows) {
+        const v = (r[c] || "").trim();
+        if (txParseDate(v)) ds++;
+        else if (txParseAmount(v) != null && /\d/.test(v)) as++;
+        tl += v.replace(/[0-9.,$\-\/]/g, "").length;
+      }
+      if (ds > bds) { bds = ds; bd = c; }
+      if (as > bas) { bas = as; ba = c; }
+      if (tl > btl) { btl = tl; bt = c; }
+    }
+    di = bd; ai = ba; ci = bt;
+  }
+  const out = [];
+  for (const r of body) {
+    const date = txParseDate(di >= 0 ? r[di] : null);
+    let amt = null;
+    if (ai >= 0) amt = txParseAmount(r[ai]);
+    if (amt == null && (debit >= 0 || credit >= 0)) {
+      const dv = debit >= 0 ? txParseAmount(r[debit]) : null;
+      const cv = credit >= 0 ? txParseAmount(r[credit]) : null;
+      if (dv) amt = -Math.abs(dv); else if (cv) amt = Math.abs(cv);
+    }
+    const name = (ci >= 0 ? (r[ci] || "") : "").trim();
+    if (!date || amt == null) continue;
+    out.push({ date, name: name || "Transaction", amt });
+  }
+  return out;
+}
+function txParseOFX(text) {
+  const out = [];
+  const blocks = String(text || "").match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/gi) || [];
+  const tag = (b, t) => { const m = b.match(new RegExp("<" + t + ">([^<\\r\\n]+)", "i")); return m ? m[1].trim() : null; };
+  blocks.forEach((b) => {
+    const date = txParseDate(tag(b, "DTPOSTED") || "");
+    const amt = txParseAmount(tag(b, "TRNAMT"));
+    const name = tag(b, "NAME") || tag(b, "MEMO") || "Transaction";
+    if (date && amt != null) out.push({ date, name, amt });
+  });
+  return out;
+}
+function txParsePdfLines(lines) {
+  const out = [];
+  let yearHint = new Date().getFullYear();
+  for (const l of lines) { const m = l.match(/(20\d{2})/); if (m) { yearHint = +m[1]; break; } }
+  const dateRe = /(\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+\d{4})?)/i;
+  const moneyRe = /\(?-?\$?\s?\d[\d,]*\.\d{2}\)?-?/g;
+  for (const line of lines) {
+    const dm = line.match(dateRe);
+    if (!dm) continue;
+    const date = txParseDate(dm[0], yearHint);
+    if (!date) continue;
+    const monies = line.match(moneyRe);
+    if (!monies || !monies.length) continue;
+    const amt = txParseAmount(monies[monies.length - 1]);   // rightmost money = txn amount (tune per bank)
+    if (amt == null) continue;
+    let name = line.replace(dm[0], "");
+    monies.forEach((mm) => { name = name.replace(mm, ""); });
+    name = name.replace(/\s+/g, " ").trim().replace(/^[\-–·,\s]+|[\-–·,\s]+$/g, "");
+    out.push({ date, name: name || "Transaction", amt });
+  }
+  return out;
+}
+async function txParsePDF(file) {
+  const lib = await txLoadPdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await lib.getDocument({ data }).promise;
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const byY = {};
+    tc.items.forEach((it) => {
+      if (!it.str || !it.str.trim()) return;
+      const y = Math.round(it.transform[5]);
+      (byY[y] = byY[y] || []).push({ x: it.transform[4], s: it.str });
+    });
+    Object.keys(byY).map(Number).sort((a, b) => b - a).forEach((y) => {
+      const line = byY[y].sort((a, b) => a.x - b.x).map((o) => o.s).join(" ").replace(/\s+/g, " ").trim();
+      if (line) lines.push(line);
+    });
+  }
+  return txParsePdfLines(lines);
+}
+/* dispatch by extension, with a content sniff fallback */
+async function txParseStatement(file) {
+  const name = (file.name || "").toLowerCase();
+  const ext = name.slice(name.lastIndexOf(".") + 1);
+  if (ext === "pdf") return await txParsePDF(file);
+  const text = await file.text();
+  if (ext === "ofx" || ext === "qfx" || /<STMTTRN>/i.test(text)) return txParseOFX(text);
+  return txParseCSV(text);
+}
+
+/* ---- receipt OCR (on-device, via Tesseract.js) ---- */
+function txParseReceiptText(text) {
+  const lines = String(text || "").split(/\n/).map((l) => l.trim()).filter(Boolean);
+  let merchant = "";
+  for (const l of lines) {
+    const letters = (l.match(/[A-Za-z]/g) || []).length;
+    if (letters >= 3 && letters >= l.replace(/\s/g, "").length * 0.5 && !/receipt|invoice|order|tel|www|\.com/i.test(l)) { merchant = l; break; }
+  }
+  const moneyIn = (s) => { const m = s.match(/\d[\d,]*\.\d{2}/g); return m ? m.map((x) => parseFloat(x.replace(/,/g, ""))) : []; };
+  let amt = null;
+  for (const l of lines) {
+    if (/(grand total|amount due|balance due|total)/i.test(l) && !/sub\s*total|subtotal/i.test(l)) {
+      const ms = moneyIn(l); if (ms.length) amt = ms[ms.length - 1];
+    }
+  }
+  if (amt == null) { let all = []; lines.forEach((l) => { all = all.concat(moneyIn(l)); }); if (all.length) amt = Math.max.apply(null, all); }
+  let date = null;
+  for (const l of lines) { const m = l.match(/\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/); if (m) { const d = txParseDate(m[0]); if (d) { date = d; break; } } }
+  const g = txGuessCat(merchant);
+  return { merchant, amt, date, cat: g.cat, icon: g.icon };
+}
+async function txOcrReceipt(image) {
+  const T = await txLoadTesseract();
+  const res = await T.recognize(image, "eng");
+  return txParseReceiptText((res && res.data && res.data.text) || "");
+}
 
 const txIsoDaysAgo = (n) => {
   const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - n);
@@ -164,8 +424,9 @@ const txIsoDaysAgo = (n) => {
 const txReadableSize = (b) => b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(1) + " MB";
 const txFmtAmt = (n) => {
   const v = Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return (n < 0 ? "\u2212$" : "+$") + v;
+  return (n < 0 ? "−$" : "+$") + v;
 };
+const TX_DUP_STYLE = { color: "var(--warn, #cf8a2c)", fontWeight: 600 };
 
 let txUid = 0;
 const txNextId = () => "imp" + (Date.now().toString(36)) + "_" + (txUid++);
@@ -174,8 +435,8 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
   const { Segmented, Button } = TX_DS;
   const [mode, setMode] = React.useState(initialMode || "Statement"); // Statement | Receipt
   const [account, setAccount] = React.useState(accounts[0] || "Everyday Checking");
-  const [stmt, setStmt] = React.useState(null);   // { fileName, size, status, rows:[] }
-  const [rcpts, setRcpts] = React.useState([]);   // [{ id, url, status, name, cat, amt, date }]
+  const [stmt, setStmt] = React.useState(null);   // { fileName, size, status, rows:[], error? }
+  const [rcpts, setRcpts] = React.useState([]);   // [{ id, url, status, name, cat, amt, date, note }]
   const [drag, setDrag] = React.useState(false);
   const inputRef = React.useRef(null);
 
@@ -187,35 +448,51 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
 
   const isStmt = mode === "Statement";
 
-  /* ---- statement ---- */
+  /* ---- statement: parse the real file ---- */
   function scanStatement(file) {
     setStmt({ fileName: file.name, size: file.size, status: "scanning", rows: [] });
-    setTimeout(() => {
-      const n = 5 + Math.floor(Math.random() * 3); // 5–7 detected
-      const rows = TX_STMT_POOL.slice(0, n).map((t, i) => ({
-        ...t, id: txNextId(), date: txIsoDaysAgo(i + 1), include: true
-      }));
+    txParseStatement(file).then((parsed) => {
+      if (!parsed || !parsed.length) {
+        setStmt((s) => s && { ...s, status: "empty", rows: [] });
+        return;
+      }
+      const rows = parsed.map((t) => {
+        const g = t.amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(t.name);
+        const dup = txIsDuplicate(t.date, t.amt);
+        return { id: txNextId(), name: t.name, cat: g.cat, icon: g.icon, amt: t.amt, date: t.date, include: !dup, dup };
+      }).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
       setStmt((s) => s && { ...s, status: "ready", rows });
-    }, 1500);
+    }).catch((err) => {
+      setStmt((s) => s && { ...s, status: "error", rows: [], error: (err && err.message) || "Could not read this file" });
+    });
   }
 
-  /* ---- receipts ---- */
+  /* ---- receipts: read the photo with on-device OCR ---- */
   function readReceipts(files) {
     files.forEach((file) => {
       if (!file.type.startsWith("image/")) return;
       const id = txNextId();
+      setRcpts((prev) => [...prev, { id, url: null, status: "scanning", name: "", cat: "Shopping", icon: "bag", amt: "", date: txIsoDaysAgo(0), fileName: file.name, note: "" }]);
       const reader = new FileReader();
       reader.onload = (ev) => {
-        setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, url: ev.target.result } : r));
-        setTimeout(() => {
-          const guess = TX_RCPT_POOL[Math.floor(Math.random() * TX_RCPT_POOL.length)];
-          setRcpts((prev) => prev.map((r) => r.id === id ? {
-            ...r, status: "ready", name: guess.name, cat: guess.cat, icon: guess.icon,
-            amt: String(guess.amt.toFixed(2))
-          } : r));
-        }, 1500);
+        const url = ev.target.result;
+        setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, url } : r));
+        txOcrReceipt(url).then((g) => {
+          setRcpts((prev) => prev.map((r) => {
+            if (r.id !== id) return r;
+            const amt = g.amt != null ? String(g.amt.toFixed(2)) : "";
+            const got = !!(g.merchant || g.amt != null);
+            return {
+              ...r, status: "ready",
+              name: g.merchant || "", cat: g.cat || r.cat, icon: g.icon || r.icon,
+              amt, date: g.date || r.date,
+              note: got ? "" : "Couldn’t read it automatically — add the details below."
+            };
+          }));
+        }).catch(() => {
+          setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, status: "ready", note: "Couldn’t read it automatically — add the details below." } : r));
+        });
       };
-      setRcpts((prev) => [...prev, { id, url: null, status: "scanning", name: "", cat: "Shopping", icon: "bag", amt: "", date: txIsoDaysAgo(0), fileName: file.name }]);
       reader.readAsDataURL(file);
     });
   }
@@ -246,14 +523,15 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
         name: r.name, cat: r.cat, amt: r.amt, date: r.date, day: txDayLabel(r.date),
         account, icon: r.icon,
         // statement rows arrive auto-categorized by our parser — flag them for a quick human check
-        review: true, reason: "Imported from statement"
+        review: true, reason: r.dup ? "Imported from statement · possible duplicate" : "Imported from statement"
       }));
     } else {
       items = rcptReady.map((r) => {
         const a = Math.abs(parseFloat(r.amt) || 0);
         return {
           name: r.name || "Receipt", cat: r.cat, amt: -a, date: r.date, day: txDayLabel(r.date),
-          account, icon: r.icon, receipt: r.url
+          account, icon: r.icon, receipt: r.url,
+          review: true, reason: "Scanned receipt"
         };
       });
     }
@@ -262,12 +540,14 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
 
   function reset() { setStmt(null); setRcpts([]); }
 
+  const dupCount = isStmt && stmt && stmt.status === "ready" ? stmt.rows.filter((r) => r.dup).length : 0;
+
   return (
     <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="fs-modal imp-modal" role="dialog" aria-modal="true" aria-label="Import transactions">
         <div className="fs-modal-head">
           <span className="fs-modal-title"><span className="fs-ico"><Icon name="upload" /></span>Import to transactions</span>
-          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"\u00D7"}</button>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
         </div>
 
         <div className="imp-body">
@@ -277,7 +557,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
           </div>
 
           <input ref={inputRef} type="file" hidden multiple={!isStmt}
-            accept={isStmt ? ".pdf,.csv,.ofx,.qfx" : "image/*"}
+            accept={isStmt ? ".pdf,.csv,.tsv,.ofx,.qfx,.txt" : "image/*"}
             onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
 
           {/* ---------- STATEMENT ---------- */}
@@ -288,7 +568,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
               onDragLeave={() => setDrag(false)} onDrop={onDrop}>
               <span className="dz-ico"><Icon name="file" /></span>
               <span className="dz-title">Drop a statement, or <b>browse</b></span>
-              <span className="dz-sub">We scan it locally and list every transaction for you to review.</span>
+              <span className="dz-sub">We read it on this device and list every transaction for you to review.</span>
               <span className="dz-formats">PDF · CSV · OFX · QFX</span>
             </div>
             :
@@ -298,8 +578,10 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                 <div className="imp-file-meta">
                   <span className="imp-file-name">{stmt.fileName}</span>
                   <span className="imp-file-sub">
-                    {stmt.status === "scanning" ? "Scanning\u2026" :
-                      stmtSel.length + " of " + stmt.rows.length + " selected \u00B7 " + txReadableSize(stmt.size)}
+                    {stmt.status === "scanning" ? "Reading…" :
+                      stmt.status === "empty" ? "No transactions found · " + txReadableSize(stmt.size) :
+                      stmt.status === "error" ? "Couldn’t read this file" :
+                      stmtSel.length + " of " + stmt.rows.length + " selected · " + txReadableSize(stmt.size)}
                   </span>
                 </div>
                 {stmt.status === "scanning"
@@ -309,6 +591,14 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
 
               {stmt.status === "scanning" ?
                 <div className="imp-skeleton">{[0, 1, 2, 3].map((i) => <div key={i} className="imp-skel-row" />)}</div>
+                : stmt.status === "empty" ?
+                <div className="txn-empty" style={{ padding: "18px 14px" }}>
+                  We couldn&rsquo;t find any transactions in <b>{stmt.fileName}</b>. If it&rsquo;s a scanned/image PDF, try exporting your statement as <b>CSV</b> or <b>OFX/QFX</b> from your bank, then drop it here.
+                </div>
+                : stmt.status === "error" ?
+                <div className="txn-empty" style={{ padding: "18px 14px", color: "var(--red)" }}>
+                  {stmt.error}. Try a CSV or OFX/QFX export from your bank.
+                </div>
                 :
                 <React.Fragment>
                   <div className="imp-acctsel">
@@ -317,6 +607,10 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                       {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
                     </select>
                   </div>
+                  {dupCount > 0 &&
+                    <div className="imp-mode-hint" style={{ ...TX_DUP_STYLE, display: "block", margin: "2px 2px 8px" }}>
+                      {"⚠ "}{dupCount} {dupCount === 1 ? "row looks like a transaction you already have" : "rows look like transactions you already have"} (same day &amp; amount) — unchecked by default.
+                    </div>}
                   <div className="imp-detected">
                     {stmt.rows.map((r) =>
                       <label className={"imp-row" + (r.include ? "" : " off")} key={r.id}>
@@ -325,7 +619,10 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                         <span className="imp-row-ico"><Icon name={r.icon} /></span>
                         <span className="imp-row-main">
                           <span className="imp-row-name">{r.name}</span>
-                          <span className="imp-row-meta">{txDayLabel(r.date)} {"\u00B7"} {r.cat}</span>
+                          <span className="imp-row-meta">
+                            {txDayLabel(r.date)} {"·"} {r.cat}
+                            {r.dup && <span style={TX_DUP_STYLE}> {"·"} {"⚠"} possible duplicate</span>}
+                          </span>
                         </span>
                         <span className={"imp-row-amt" + (r.amt > 0 ? " pos" : "")}>{txFmtAmt(r.amt)}</span>
                       </label>
@@ -348,39 +645,48 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
 
               {rcpts.length > 0 &&
                 <div className="rcpt-cards">
-                  {rcpts.map((r) =>
+                  {rcpts.map((r) => {
+                    const rDup = r.status === "ready" && r.amt ? txIsDuplicate(r.date, parseFloat(r.amt)) : false;
+                    return (
                     <div className="rcpt-card" key={r.id}>
                       <div className="rcpt-thumb">
                         {r.url ? <img src={r.url} alt={r.fileName} /> : <span className="rcpt-ph"><Icon name="image" /></span>}
-                        {r.status === "scanning" && <span className="rcpt-reading"><span className="imp-spin"><Icon name="loader" /></span>Reading{"\u2026"}</span>}
+                        {r.status === "scanning" && <span className="rcpt-reading"><span className="imp-spin"><Icon name="loader" /></span>Reading{"…"}</span>}
                       </div>
                       {r.status === "ready" ?
                         <div className="rcpt-fields">
+                          {r.note && <span className="imp-mode-hint" style={{ display: "block", marginBottom: 4 }}>{r.note}</span>}
+                          {rDup && <span className="imp-mode-hint" style={{ ...TX_DUP_STYLE, display: "block", marginBottom: 4 }}>{"⚠"} You may already have this (same day &amp; amount).</span>}
                           <label className="rcpt-field"><span>Merchant</span>
                             <input value={r.name} onChange={(e) => setRcpts((p) => p.map((x) => x.id === r.id ? { ...x, name: e.target.value } : x))} /></label>
                           <div className="rcpt-field-row">
                             <label className="rcpt-field"><span>Amount</span>
                               <input type="number" step="0.01" inputMode="decimal" value={r.amt}
                                 onChange={(e) => setRcpts((p) => p.map((x) => x.id === r.id ? { ...x, amt: e.target.value } : x))} /></label>
+                            <label className="rcpt-field"><span>Date</span>
+                              <input type="date" max={txToday()} value={r.date}
+                                onChange={(e) => setRcpts((p) => p.map((x) => x.id === r.id ? { ...x, date: e.target.value } : x))} /></label>
+                          </div>
+                          <div className="rcpt-field-row">
                             <label className="rcpt-field"><span>Category</span>
                               <select value={r.cat} onChange={(e) => setRcpts((p) => p.map((x) => x.id === r.id ? { ...x, cat: e.target.value } : x))}>
                                 {txExpenseCats().map((c) => <option key={c} value={c}>{c}</option>)}
                               </select></label>
+                            <button className="rcpt-remove" onClick={() => setRcpts((p) => p.filter((x) => x.id !== r.id))} aria-label="Remove receipt"><Icon name="trash" /></button>
                           </div>
-                          <button className="rcpt-remove" onClick={() => setRcpts((p) => p.filter((x) => x.id !== r.id))} aria-label="Remove receipt"><Icon name="trash" /></button>
                         </div>
                         :
                         <div className="rcpt-fields"><div className="imp-skel-row" /><div className="imp-skel-row short" /></div>}
-                    </div>
-                  )}
+                    </div>);
+                  })}
                 </div>}
             </div>}
         </div>
 
         <div className="fs-modal-foot">
           <span className="fs-foot-note">{isStmt
-            ? "Nothing is uploaded \u2014 your statement is read on this device."
-            : "Receipts attach to the transaction and stay on this device."}</span>
+            ? "Nothing is uploaded — your statement is read on this device."
+            : "Receipts are read on this device and attach to the transaction."}</span>
           <div className="right">
             {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
             {Button && <Button variant="primary" size="sm" onClick={doImport} disabled={!canImport}>

@@ -1025,4 +1025,58 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
           <div className="kpi" style={{ marginBottom: 4 }}>
             <span className="kpi-label">Market value</span>
             <span className="kpi-val">{invMoney(h.value, 2)}</span>
-            <span className={"kpi-delta " + (totalGain >= 0 ? "pos" : "neg")}>{totalGain >= 0 ? "\u2191" : "\u2193"} {in
+            <span className={"kpi-delta " + (totalGain >= 0 ? "pos" : "neg")}>{totalGain >= 0 ? "\u2191" : "\u2193"} {invSigned(totalGain, 0)} ({invPct(h.ret)}) all time</span>
+          </div>
+          <div className="ainfo-list">
+            <div className="ainfo-row"><span className="ainfo-k">Shares</span><span className="ainfo-v">{h.shares}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Avg cost / share</span><span className="ainfo-v">{invMoney(h.cost, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Cost basis</span><span className="ainfo-v">{invMoney(costBasis, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Today</span><span className="ainfo-v" style={{ color: h.day >= 0 ? "var(--green)" : "var(--red)" }}>{invSigned(dayDollar, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Portfolio weight</span><span className="ainfo-v">{(h.value / (portfolioValue || h.value) * 100).toFixed(1)}%</span></div>
+          </div>
+          <button className="inv-edit-btn" onClick={() => onEdit && onEdit(h)}><Icon name="pencil" />Edit position</button>
+        </Card>
+
+        <Card widget className="span4">
+          <div className="widget-head"><span className="widget-title">Key statistics</span><span className="muted">{h.ticker}</span></div>
+          <div className="inv-kpis">
+            <Stat k="Open" v={invMoney(open, 2)} />
+            <Stat k="Previous close" v={invMoney(prevClose, 2)} />
+            <Stat k="Day's range" v={invMoney(dayLo, 2) + " – " + invMoney(dayHi, 2)} />
+            <Stat k="52-week range" v={invMoney(wkLo, 2) + " – " + invMoney(wkHi, 2)} />
+            <Stat k="Volume" v={invVol(volume)} />
+            <Stat k="Avg. volume" v={invVol(avgVol)} />
+            <Stat k={meta.mktCap && meta.mktCap.includes("AUM") ? "Net assets" : "Market cap"} v={meta.mktCap || "\u2014"} />
+            <Stat k="P/E ratio" v={meta.pe || "\u2014"} />
+            <Stat k="Dividend yield" v={meta.yield || "\u2014"} />
+            <Stat k="Beta (5Y)" v={meta.beta || "\u2014"} />
+          </div>
+        </Card>
+      </div>
+
+      {/* About + danger zone */}
+      <div className="dash-grid">
+        <Card widget className="span4">
+          <div className="widget-head"><span className="widget-title">About {h.name}</span></div>
+          <p className="inv-about">{meta.about || (h.name + " is held in your brokerage account. Add notes or research links here.")}</p>
+        </Card>
+        <Card widget className="span2">
+          <div className="widget-head"><span className="widget-title">Manage</span></div>
+          <div className="ainfo-list">
+            <div className="ainfo-row"><span className="ainfo-k">Symbol</span><span className="ainfo-v">{h.ticker}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Asset class</span><span className="ainfo-v">{h.cls}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Last price</span><span className="ainfo-v">{invMoney(h.price, 2)}</span></div>
+          </div>
+          <div className="danger-zone">
+            <span className="dz-title">Remove</span>
+            <span className="dz-desc">Take this position out of your tracked portfolio. You can add it again later.</span>
+            <button className="btn-danger-out" onClick={() => setConfirm(true)}><Icon name="trash" />Remove position</button>
+          </div>
+        </Card>
+      </div>
+
+      {confirm && <InvDeleteModal holding={h} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); onDelete(); }} />}
+    </React.Fragment>);
+}
+
+Object.assign(window, { InvestmentsPage, InvestmentDetailPage, InvestmentModal, InvDeleteModal, INV_SEED });
