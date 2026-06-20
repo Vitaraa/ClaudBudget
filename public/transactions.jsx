@@ -244,6 +244,112 @@ function txGuessCat(name) {
   return { cat: "Shopping", icon: "bag" };
 }
 
+/* ---- merchant-name cleaner -------------------------------------------------
+   Bank/card statements pad the payee with the posting date, store/auth refs,
+   processor prefixes (SQ*, TST*…) and a trailing city/region. The date is
+   already shown in its own column, so strip it and reduce the rest to a tidy,
+   human-readable merchant name. */
+const TX_REGION = "AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT|AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY";
+const TX_DATE_LEAD = new RegExp(
+  "^(?:" +
+    "\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2}" +
+    "|\\d{1,2}[\\/\\-.]\\d{1,2}(?:[\\/\\-.]\\d{2,4})?" +
+    "|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:,?\\s*\\d{2,4})?" +
+    "|\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?(?:\\s+\\d{2,4})?" +
+  ")\\b[\\s,]*", "i");
+const TX_TIME_LEAD = /^\d{1,2}:\d{2}(?::\d{2})?\s+/;
+const TX_PREFIX = /^(?:(?:sq|tst|sp|pp|paypal|dd|ec)\s?\*\s*|(?:pos(?: purchase| debit)?|point of sale|purchase|payment|pre-?authorized|pre-?auth|recurring|debit card|credit card|debit|visa|mastercard|amex|interac e-?transfer|interac|e-?transfer|bill payment|web pmt|ach|eft)[\s:#-]+)/i;
+const TX_KEEP_UPPER = new Set(["KFC", "BP", "IGA", "BMO", "RBC", "CIBC", "HSBC", "TD", "LCBO", "IKEA", "IHOP", "UPS", "DHL", "KPMG", "AMC", "GNC", "CVS", "DSW", "H&M", "A&W", "BBQ", "ATM", "PC"]);
+function txIsNoiseToken(t) {
+  if (!t) return false;
+  if (/[#*]/.test(t)) return true;                       // store#, masked or processor refs
+  if (/\d{4,}/.test(t)) return true;                     // 4+ digit run (ref / store / card / phone tail)
+  if (/^x+\d+$/i.test(t)) return true;                   // masked card  xxxx1234
+  if (/^[A-Za-z0-9]+$/.test(t) && (t.match(/\d/g) || []).length >= 2 && /[A-Za-z]/.test(t)) return true; // W123, RT4G83
+  return false;
+}
+function txTitleCaseWord(w) {
+  if (!w) return w;
+  if (TX_KEEP_UPPER.has(w.toUpperCase())) return w.toUpperCase();
+  return w.replace(/[A-Za-z][A-Za-z'’]*/g, (m) => m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
+}
+function txCleanMerchant(raw) {
+  let s = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+  if (!s) return "Transaction";
+  const original = s;
+  // peel leading dates / times / processor prefixes (in any order, repeatedly)
+  for (let i = 0; i < 8; i++) {
+    const before = s;
+    if (TX_DATE_LEAD.test(s)) s = s.replace(TX_DATE_LEAD, "").trim();
+    if (TX_TIME_LEAD.test(s)) s = s.replace(TX_TIME_LEAD, "").trim();
+    if (TX_PREFIX.test(s)) s = s.replace(TX_PREFIX, "").trim();
+    if (s === before) break;
+  }
+  // the real merchant name leads on card descriptors -> keep up to the first noise token
+  const toks = s.split(" ");
+  const kept = [];
+  for (const t of toks) { if (txIsNoiseToken(t)) break; kept.push(t); }
+  s = kept.length ? kept.join(" ") : toks.filter((t) => !txIsNoiseToken(t)).join(" ");
+  // drop trailing country, then a trailing province/state code
+  for (let i = 0; i < 2; i++) s = s.replace(/\s+(?:ca|can|canada|usa|us|united states)$/i, "").trim();
+  for (let i = 0; i < 2; i++) s = s.replace(new RegExp("\\s+(?:" + TX_REGION + ")$"), "").trim();
+  s = s.replace(/\s{2,}/g, " ").replace(/^[\s,.*#-]+|[\s,.*#-]+$/g, "").trim();
+  if (!s) s = original.replace(/[#*]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  const letters = s.replace(/[^A-Za-z]/g, "");
+  if (letters && letters === letters.toUpperCase()) s = s.split(" ").map(txTitleCaseWord).join(" ");
+  s = s.replace(/\.(com|ca|net|org|io|co|biz|us|app|store)\b/i, (m) => m.toLowerCase());
+  return s || "Transaction";
+}
+
+/* ---- account auto-detection (match the statement to an account by last-4) -- */
+function txAcctName(a) { return typeof a === "string" ? a : ((a && a.name) || ""); }
+function txAcctIsCredit(a) {
+  if (!a || typeof a === "string") return false;
+  const hay = ((a.type || "") + " " + (a.group || "") + " " + (a.group_label || "") + " " + (a.kind || "")).toLowerCase();
+  return /credit/.test(hay);
+}
+function txLast4(v) { return String(v == null ? "" : v).replace(/\D/g, "").slice(-4); }
+/* pull candidate last-4s out of raw statement text (OFX ids, "ending 1234",
+   masked cards, full 4-4-4-4 numbers) — only from labelled spots, so stray
+   amounts/dates never look like an account number. */
+function txExtractAcctHints(text) {
+  const hits = new Set();
+  const s = String(text || "");
+  let m;
+  const add = (d) => { const f = txLast4(d); if (f.length === 4) hits.add(f); };
+  const tagRe = /<(?:ACCTID|CCACCTID|BANKID)>\s*([0-9Xx*\- ]{3,40})/gi;
+  while ((m = tagRe.exec(s))) add(m[1]);
+  const endRe = /ending(?:\s+in)?\s*[:#]?\s*(\d{4})\b/gi;
+  while ((m = endRe.exec(s))) add(m[1]);
+  const acctRe = /acc(?:oun)?t\s*(?:number|no\.?|#)?\s*[:#]?\s*[*xX•·\- ]*?(\d{4})\b/gi;
+  while ((m = acctRe.exec(s))) add(m[1]);
+  const cardRe = /card\s*(?:number|no\.?|#|ending)?\s*[:#]?\s*[*xX•·\- ]*?(\d{4})\b/gi;
+  while ((m = cardRe.exec(s))) add(m[1]);
+  const maskRe = /(?:[*xX•·]\s*){2,}(\d{4})\b/g;
+  while ((m = maskRe.exec(s))) add(m[1]);
+  const fullRe = /\b\d{4}[\s\-]\d{4}[\s\-]\d{4}[\s\-](\d{4})\b/g;
+  while ((m = fullRe.exec(s))) add(m[1]);
+  return hits;
+}
+function txMatchAccount(hints, accts) {
+  if (!hints || !hints.size) return null;
+  for (const a of (accts || [])) {
+    if (a && typeof a === "object" && a.mask && hints.has(txLast4(a.mask))) return a;
+  }
+  return null;
+}
+/* On a credit-card statement, charges (your purchases) are the dominant rows.
+   Issuers disagree on the sign, so if charges came in positive (pos majority),
+   invert every row so purchases become expenses and payments become credits.
+   Bank/cash statements use the reliable "deposit +, withdrawal -" convention,
+   so they are never flipped. */
+function txStatementFlip(rows, isCreditCard) {
+  if (!isCreditCard) return false;
+  let pos = 0, neg = 0;
+  (rows || []).forEach((r) => { if (r.amt > 0) pos++; else if (r.amt < 0) neg++; });
+  return pos > neg;
+}
+
 /* ---- duplicate detection: same date + same |amount| as an existing txn ---- */
 function txExistingTxns() {
   const d = window.ClaudData;
@@ -378,16 +484,17 @@ async function txParsePDF(file) {
       if (line) lines.push(line);
     });
   }
-  return txParsePdfLines(lines);
+  return { txns: txParsePdfLines(lines), text: lines.join("\n") };
 }
-/* dispatch by extension, with a content sniff fallback */
+/* dispatch by extension, with a content sniff fallback.
+   returns { txns:[{date,name,amt}], hints:Set<last4> } */
 async function txParseStatement(file) {
   const name = (file.name || "").toLowerCase();
   const ext = name.slice(name.lastIndexOf(".") + 1);
-  if (ext === "pdf") return await txParsePDF(file);
+  if (ext === "pdf") { const r = await txParsePDF(file); return { txns: r.txns, hints: txExtractAcctHints(r.text) }; }
   const text = await file.text();
-  if (ext === "ofx" || ext === "qfx" || /<STMTTRN>/i.test(text)) return txParseOFX(text);
-  return txParseCSV(text);
+  const txns = (ext === "ofx" || ext === "qfx" || /<STMTTRN>/i.test(text)) ? txParseOFX(text) : txParseCSV(text);
+  return { txns, hints: txExtractAcctHints(text) };
 }
 
 /* ---- receipt OCR (on-device, via Tesseract.js) ---- */
@@ -408,6 +515,7 @@ function txParseReceiptText(text) {
   if (amt == null) { let all = []; lines.forEach((l) => { all = all.concat(moneyIn(l)); }); if (all.length) amt = Math.max.apply(null, all); }
   let date = null;
   for (const l of lines) { const m = l.match(/\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/); if (m) { const d = txParseDate(m[0]); if (d) { date = d; break; } } }
+  merchant = merchant ? txCleanMerchant(merchant) : "";
   const g = txGuessCat(merchant);
   return { merchant, amt, date, cat: g.cat, icon: g.icon };
 }
@@ -432,10 +540,16 @@ let txUid = 0;
 const txNextId = () => "imp" + (Date.now().toString(36)) + "_" + (txUid++);
 
 function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
-  const { Segmented, Button } = TX_DS;
-  const [mode, setMode] = React.useState(initialMode || "Statement"); // Statement | Receipt
-  const [account, setAccount] = React.useState(accounts[0] || "Everyday Checking");
-  const [stmt, setStmt] = React.useState(null);   // { fileName, size, status, rows:[], error? }
+  const { Button } = TX_DS;
+  // Each entry button (Import statement / Scan receipt) opens its own dedicated
+  // popup — the mode is fixed by initialMode, there is no in-modal toggle.
+  const mode = initialMode === "Receipt" ? "Receipt" : "Statement";
+  const isStmt = mode === "Statement";
+  // accounts may arrive as rich objects ({name,mask,type,...}) or plain names
+  const acctNames = (accounts || []).map(txAcctName).filter(Boolean);
+  const acctObj = (nm) => (accounts || []).find((a) => txAcctName(a) === nm) || null;
+  const [account, setAccount] = React.useState(acctNames[0] || "Everyday Checking");
+  const [stmt, setStmt] = React.useState(null);   // { fileName, size, status, rows:[], detected?, error? }
   const [rcpts, setRcpts] = React.useState([]);   // [{ id, url, status, name, cat, amt, date, note }]
   const [drag, setDrag] = React.useState(false);
   const inputRef = React.useRef(null);
@@ -446,26 +560,51 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const isStmt = mode === "Statement";
+  const isCredit = txAcctIsCredit(acctObj(account));
+
+  /* derive a preview row from a parsed transaction, given the chosen orientation */
+  function txRowFrom(t, flip, id) {
+    const amt = flip ? -t.amt : t.amt;
+    const g = amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(t.name);
+    return { id: id || txNextId(), name: txCleanMerchant(t.name), rawAmt: t.amt, cat: g.cat, icon: g.icon, amt, date: t.date, include: !txIsDuplicate(t.date, amt), dup: txIsDuplicate(t.date, amt) };
+  }
 
   /* ---- statement: parse the real file ---- */
   function scanStatement(file) {
     setStmt({ fileName: file.name, size: file.size, status: "scanning", rows: [] });
-    txParseStatement(file).then((parsed) => {
-      if (!parsed || !parsed.length) {
+    txParseStatement(file).then(({ txns, hints }) => {
+      if (!txns || !txns.length) {
         setStmt((s) => s && { ...s, status: "empty", rows: [] });
         return;
       }
-      const rows = parsed.map((t) => {
-        const g = t.amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(t.name);
-        const dup = txIsDuplicate(t.date, t.amt);
-        return { id: txNextId(), name: t.name, cat: g.cat, icon: g.icon, amt: t.amt, date: t.date, include: !dup, dup };
-      }).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-      setStmt((s) => s && { ...s, status: "ready", rows });
+      // auto-detect the matching account by last-4 found in the statement
+      const detected = txMatchAccount(hints, accounts);
+      if (detected) setAccount(detected.name);
+      const useCredit = detected ? txAcctIsCredit(detected) : isCredit;
+      const flip = txStatementFlip(txns, useCredit);
+      const rows = txns.map((t) => txRowFrom(t, flip))
+        .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+      setStmt((s) => s && { ...s, status: "ready", rows, detected: detected ? detected.name : null });
     }).catch((err) => {
       setStmt((s) => s && { ...s, status: "error", rows: [], error: (err && err.message) || "Could not read this file" });
     });
   }
+
+  /* re-orient signs/categories if the chosen account's credit-ness changes
+     after parsing (e.g. the user picks a different account); include toggles
+     are preserved by id. */
+  React.useEffect(() => {
+    setStmt((s) => {
+      if (!s || s.status !== "ready" || !s.rows || !s.rows.length) return s;
+      const flip = txStatementFlip(s.rows.map((r) => ({ amt: r.rawAmt })), isCredit);
+      const rows = s.rows.map((r) => {
+        const amt = flip ? -r.rawAmt : r.rawAmt;
+        const g = amt > 0 ? { cat: "Income", icon: "income" } : txGuessCat(r.name);
+        return { ...r, amt, cat: g.cat, icon: g.icon, dup: txIsDuplicate(r.date, amt) };
+      });
+      return { ...s, rows };
+    });
+  }, [isCredit]);
 
   /* ---- receipts: read the photo with on-device OCR ---- */
   function readReceipts(files) {
@@ -546,15 +685,14 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
     <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="fs-modal imp-modal" role="dialog" aria-modal="true" aria-label="Import transactions">
         <div className="fs-modal-head">
-          <span className="fs-modal-title"><span className="fs-ico"><Icon name="upload" /></span>Import to transactions</span>
+          <span className="fs-modal-title"><span className="fs-ico"><Icon name={isStmt ? "upload" : "camera"} /></span>{isStmt ? "Import statement" : "Scan receipt"}</span>
           <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
         </div>
 
         <div className="imp-body">
-          <div className="imp-modeswitch">
-            {Segmented && <Segmented options={["Statement", "Receipt"]} value={mode} onChange={(m) => { setMode(m); }} />}
-            <span className="imp-mode-hint">{isStmt ? "Bulk-import a bank or card statement." : "Snap a receipt and we'll read the details."}</span>
-          </div>
+          <p className="imp-mode-hint" style={{ margin: "0 0 6px" }}>
+            {isStmt ? "Bulk-import a bank or card statement — read on this device." : "Snap a receipt and we'll read the details on this device."}
+          </p>
 
           <input ref={inputRef} type="file" hidden multiple={!isStmt}
             accept={isStmt ? ".pdf,.csv,.tsv,.ofx,.qfx,.txt" : "image/*"}
@@ -604,9 +742,13 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                   <div className="imp-acctsel">
                     <span>Import into</span>
                     <select value={account} onChange={(e) => setAccount(e.target.value)}>
-                      {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
+                      {acctNames.map((a) => <option key={a} value={a}>{a}</option>)}
                     </select>
                   </div>
+                  {stmt.detected &&
+                    <div className="imp-mode-hint" style={{ display: "block", margin: "-2px 2px 8px", color: "var(--accent)" }}>
+                      Matched to <b>{stmt.detected}</b> by the last 4 digits on your statement.
+                    </div>}
                   {dupCount > 0 &&
                     <div className="imp-mode-hint" style={{ ...TX_DUP_STYLE, display: "block", margin: "2px 2px 8px" }}>
                       {"⚠ "}{dupCount} {dupCount === 1 ? "row looks like a transaction you already have" : "rows look like transactions you already have"} (same day &amp; amount) — unchecked by default.

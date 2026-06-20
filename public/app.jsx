@@ -2105,9 +2105,11 @@ function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [cycleStart, setCycleStart] = useState(1); // day of month the reporting cycle starts on
 
-  // names of accounts available to attach a transaction to
-  const acctNames = [...ACCOUNT_GROUPS.flatMap((g) => g.accounts), ...addedAccts]
-    .filter((a) => !deletedAccts.includes(a.name)).map((a) => a.name);
+  // accounts available to attach a transaction to — full objects (carry mask/type
+  // for import auto-detection) and a names-only list for the simpler pickers
+  const acctList = [...ACCOUNT_GROUPS.flatMap((g) => g.accounts), ...addedAccts]
+    .filter((a) => !deletedAccts.includes(a.name));
+  const acctNames = acctList.map((a) => a.name);
 
   // leaving the Accounts tab closes any open account
   useEffect(() => { if (tab !== "Accounts") setAcctOpen(null); if (tab !== "Investments") setHoldingOpen(null); }, [tab]);
@@ -2534,7 +2536,7 @@ function App() {
       {addTxnOpen && <AddTransactionModal accounts={acctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} />}
 
       {/* ---- Import statements / receipts ---- */}
-      {importOpen && <ImportModal accounts={acctNames} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => { ClaudActions.importTxns(items); setImportOpen(null); }} />}
+      {importOpen && <ImportModal accounts={acctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => { ClaudActions.importTxns(items); setImportOpen(null); }} />}
 
       {/* ---- Add / edit investment ---- */}
       {invModal && <InvestmentModal modal={invModal} onClose={() => setInvModal(null)} onSave={saveHolding} onDelete={(id) => { setInvModal(null); setInvDelete(holdings.find((x) => x.id === id) || null); }} />}

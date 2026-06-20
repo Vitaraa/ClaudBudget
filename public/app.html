@@ -387,7 +387,7 @@
      exactly six transaction rows: six rows at 58px each plus five 1px dividers
      equals 353px. Scoped with the dash suffix so the full Transactions and
      Goals pages are unaffected. */
-  .txn-list--dash, .goal-list--dash { height: 353px; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--accent-line) transparent; }
+  .txn-list--dash, .goal-list--dash { height: 353px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--accent-line) transparent; }
   .txn-list--dash::-webkit-scrollbar, .goal-list--dash::-webkit-scrollbar { width: 8px; }
   .txn-list--dash::-webkit-scrollbar-track, .goal-list--dash::-webkit-scrollbar-track { background: transparent; }
   .txn-list--dash::-webkit-scrollbar-thumb, .goal-list--dash::-webkit-scrollbar-thumb { background: var(--accent-line); border-radius: 8px; }
