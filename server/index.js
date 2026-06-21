@@ -111,7 +111,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`\n  Claud is running.`);
   console.log(`  ▸ Open http://localhost:${PORT}`);
   console.log(`  ▸ Database: ${DB_PATH}`);
