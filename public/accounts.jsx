@@ -518,11 +518,14 @@ function AccountDetailPage({ acct, onDelete }) {
 Object.assign(window, { AccountDetailPage, ACCT_EXTRA, acGen });
 
 /* ============================================================
-   ADD ACCOUNT — Canada-focused new-account flow
+   ADD ACCOUNT — region-aware new-account flow
    Reuses the .fs-* modal vocabulary (shared with Foresight).
-   Defaults: Canadian institutions, chequing/TFSA/RRSP types,
-   CAD balances. On submit, builds an account object + registers
-   its detail-page data into ACCT_EXTRA, then calls onAdd.
+   The institution list, account types and currency are read from
+   window.ClaudRegions.current() at render time, so the same modal
+   serves CA/US/UK/AU etc. CA_BANKS + AC_ADD_TYPES below stay as a
+   defensive fallback when ClaudRegions isn't loaded. On submit,
+   builds an account object + registers its detail-page data into
+   ACCT_EXTRA, then calls onAdd.
    ============================================================ */
 const CA_BANKS = [
   "RBC Royal Bank", "TD Canada Trust", "Scotiabank", "BMO", "CIBC",
@@ -540,8 +543,12 @@ const AC_ADD_TYPES = {
 
 function AddAccountModal({ onClose, onAdd }) {
   const { Button } = AC;
-  const [inst, setInst] = acUseState(CA_BANKS[0]);
-  const [type, setType] = acUseState("Chequing");
+  // Region drives the institution list, account types and currency label.
+  // Falls back to the hardcoded Canada lists if ClaudRegions isn't loaded.
+  const region = (window.ClaudRegions && window.ClaudRegions.current()) || { banks: CA_BANKS, types: AC_ADD_TYPES, currency: "CAD" };
+  const typeKeys = Object.keys(region.types);
+  const [inst, setInst] = acUseState(() => region.banks[0]);
+  const [type, setType] = acUseState(() => typeKeys[0]);
   const [name, setName] = acUseState("");
   const [bal, setBal] = acUseState("");
   const [mask, setMask] = acUseState("");
@@ -554,9 +561,10 @@ function AddAccountModal({ onClose, onAdd }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const cfg = AC_ADD_TYPES[type];
-  const isSavings = type === "Savings";
-  const isCredit = type === "Credit card";
+  const cfg = region.types[type] || AC_ADD_TYPES[type] || AC_ADD_TYPES["Chequing"];
+  const isSavings = cfg.kind === "savings";
+  const isCredit = cfg.kind === "credit";
+  const isInvestment = cfg.kind === "investment";
   const balNum = parseFloat(String(bal).replace(/[^0-9.\-]/g, ""));
   const validName = name.trim().length > 0;
   const validBal = bal !== "" && !Number.isNaN(balNum);
@@ -601,13 +609,13 @@ function AddAccountModal({ onClose, onAdd }) {
           <label className="fs-field">
             <span>Institution</span>
             <select value={inst} onChange={(e) => setInst(e.target.value)}>
-              {CA_BANKS.map((b) => <option key={b} value={b}>{b}</option>)}
+              {region.banks.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>
           <label className="fs-field">
             <span>Account type</span>
             <select value={type} onChange={(e) => setType(e.target.value)}>
-              {Object.keys(AC_ADD_TYPES).map((t) => <option key={t} value={t}>{t}</option>)}
+              {typeKeys.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </label>
 
@@ -618,7 +626,7 @@ function AddAccountModal({ onClose, onAdd }) {
           </label>
 
           <label className="fs-field">
-            <span>{isCredit ? "Amount owed (CAD)" : "Current balance (CAD)"}</span>
+            <span>{isCredit ? `Amount owed (${region.currency})` : `Current balance (${region.currency})`}</span>
             <input type="number" inputMode="decimal" step="0.01" value={bal} onChange={(e) => setBal(e.target.value)} placeholder="0.00"
               style={touched && !validBal ? { borderColor: "var(--red)" } : undefined} />
           </label>
@@ -632,6 +640,13 @@ function AddAccountModal({ onClose, onAdd }) {
               <span>Interest rate (% APY)</span>
               <input type="number" inputMode="decimal" step="0.01" value={apy} onChange={(e) => setApy(e.target.value)} placeholder="4.00" />
             </label>
+          }
+
+          {isInvestment &&
+            <p className="fs-field full" style={{ margin: 0, fontSize: 12.5, color: "var(--muted)", display: "flex", alignItems: "center", gap: 7 }}>
+              <Icon name="chart" style={{ width: 14, height: 14, flexShrink: 0 }} />
+              You can add holdings to this account from the Investments tab.
+            </p>
           }
         </div>
 
@@ -656,13 +671,22 @@ Object.assign(window, { AddAccountModal });
    ============================================================ */
 function EditAccountModal({ acct, onClose }) {
   const { Button } = AC;
-  const typeFromGroup = (acct.group === "Credit" || acct.group_label === "Credit") ? "Credit card"
-    : (acct.group === "Investments" || acct.group_label === "Investments") ? "Investment"
-    : "Chequing";
-  const initialType = (acct.type && AC_ADD_TYPES[acct.type]) ? acct.type : typeFromGroup;
-  const initialIsCredit = !!(AC_ADD_TYPES[initialType] && AC_ADD_TYPES[initialType].kind === "credit");
+  // Region drives the institution list, account types and currency label.
+  // Falls back to the hardcoded Canada lists if ClaudRegions isn't loaded.
+  const region = (window.ClaudRegions && window.ClaudRegions.current()) || { banks: CA_BANKS, types: AC_ADD_TYPES, currency: "CAD" };
+  const regionTypes = region.types || {};
+  // Pick a region type whose group matches this account's group, as a fallback
+  // when the stored type isn't one of the region's named types.
+  const grp = acct.group || acct.group_label;
+  const typeFromGroup = Object.keys(regionTypes).find((k) => regionTypes[k].group === grp)
+    || Object.keys(regionTypes)[0] || "Chequing";
+  // Prefer the account's stored type (even if it isn't in this region's list);
+  // otherwise fall back to a region type derived from its group.
+  const initialType = acct.type || typeFromGroup;
+  const initialCfg = regionTypes[initialType] || AC_ADD_TYPES[initialType] || AC_ADD_TYPES["Chequing"];
+  const initialIsCredit = !!(initialCfg && initialCfg.kind === "credit");
 
-  const [inst, setInst] = acUseState(acct.inst || acct.institution || CA_BANKS[0]);
+  const [inst, setInst] = acUseState(acct.inst || acct.institution || region.banks[0]);
   const [type, setType] = acUseState(initialType);
   const [name, setName] = acUseState(acct.name || "");
   const [bal, setBal] = acUseState(String(initialIsCredit ? Math.abs(acct.bal || 0) : (acct.bal || 0)));
@@ -677,9 +701,14 @@ function EditAccountModal({ acct, onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const cfg = AC_ADD_TYPES[type] || AC_ADD_TYPES["Chequing"];
-  const isSavings = type === "Savings";
-  const isCredit = type === "Credit card";
+  const cfg = regionTypes[type] || AC_ADD_TYPES[type] || AC_ADD_TYPES["Chequing"];
+  const isSavings = cfg.kind === "savings";
+  const isCredit = cfg.kind === "credit";
+  const isInvestment = cfg.kind === "investment";
+  // Stored type/institution may not exist in the current region — keep them
+  // selectable by prepending them to the option lists.
+  const bankOpts = region.banks.includes(inst) ? region.banks : [inst, ...region.banks];
+  const typeOpts = regionTypes[type] ? Object.keys(regionTypes) : [type, ...Object.keys(regionTypes)];
   const balNum = parseFloat(String(bal).replace(/[^0-9.\-]/g, ""));
   const validName = name.trim().length > 0;
   const validBal = bal !== "" && !Number.isNaN(balNum);
@@ -717,13 +746,13 @@ function EditAccountModal({ acct, onClose }) {
           <label className="fs-field">
             <span>Institution</span>
             <select value={inst} onChange={(e) => setInst(e.target.value)}>
-              {(CA_BANKS.includes(inst) ? CA_BANKS : [inst, ...CA_BANKS]).map((b) => <option key={b} value={b}>{b}</option>)}
+              {bankOpts.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>
           <label className="fs-field">
             <span>Account type</span>
             <select value={type} onChange={(e) => setType(e.target.value)}>
-              {Object.keys(AC_ADD_TYPES).map((t) => <option key={t} value={t}>{t}</option>)}
+              {typeOpts.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </label>
 
@@ -734,7 +763,7 @@ function EditAccountModal({ acct, onClose }) {
           </label>
 
           <label className="fs-field">
-            <span>{isCredit ? "Amount owed (CAD)" : "Current balance (CAD)"}</span>
+            <span>{isCredit ? `Amount owed (${region.currency})` : `Current balance (${region.currency})`}</span>
             <input type="number" inputMode="decimal" step="0.01" value={bal} onChange={(e) => setBal(e.target.value)} placeholder="0.00"
               style={touched && !validBal ? { borderColor: "var(--red)" } : undefined} />
           </label>
@@ -748,6 +777,13 @@ function EditAccountModal({ acct, onClose }) {
               <span>Interest rate (% APY)</span>
               <input type="number" inputMode="decimal" step="0.01" value={apy} onChange={(e) => setApy(e.target.value)} placeholder="4.00" />
             </label>
+          }
+
+          {isInvestment &&
+            <p className="fs-field full" style={{ margin: 0, fontSize: 12.5, color: "var(--muted)", display: "flex", alignItems: "center", gap: 7 }}>
+              <Icon name="chart" style={{ width: 14, height: 14, flexShrink: 0 }} />
+              You can add holdings to this account from the Investments tab.
+            </p>
           }
         </div>
 

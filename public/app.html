@@ -1780,6 +1780,84 @@
     .rev-stats { grid-template-columns: 1fr 1fr; }
     .rev-cols { grid-template-columns: 1fr; gap: 22px; }
   }
+
+  /* ============================================================
+     CHART FULL-SCREEN (mobile) — see fullscreen-chart.jsx
+     A small expand button overlays each wrapped chart on mobile;
+     tapping it opens a full-screen overlay that, on a portrait
+     phone, rotates the stage 90° so the chart fills the screen in
+     landscape. A matching × closes it (Escape / backdrop too).
+     ============================================================ */
+  .cfs-host { position: relative; }
+  .cfs-open-btn {
+    position: absolute; top: 6px; right: 6px; z-index: 6;
+    display: none; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; cursor: pointer;
+    background: var(--card); color: var(--muted);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-menu);
+    transition: color var(--dur-fast), border-color var(--dur-fast);
+  }
+  .cfs-open-btn:hover { color: var(--accent); border-color: var(--accent-line); }
+  .cfs-open-btn svg { width: 18px; height: 18px; }
+  /* mobile-only affordance, as requested */
+  @media (max-width: 820px) { .cfs-open-btn { display: inline-flex; } }
+
+  body.cfs-lock { overflow: hidden; }
+
+  .cfs-overlay { position: fixed; inset: 0; z-index: 400; background: var(--scrim); }
+  .cfs-stage {
+    position: fixed; top: 0; left: 0;
+    width: 100vw; height: 100vh; box-sizing: border-box;
+    padding: 12px 16px 18px; background: var(--bg);
+    display: flex; flex-direction: column; gap: 10px;
+    transform: none; transform-origin: top left;
+  }
+  .cfs-stage-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; }
+  .cfs-stage-title { font-size: var(--text-sm); font-weight: 700; letter-spacing: var(--tracking-tight); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cfs-close-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; flex-shrink: 0; cursor: pointer;
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-md); font-size: 23px; line-height: 1;
+    transition: color var(--dur-fast), border-color var(--dur-fast);
+  }
+  .cfs-close-btn:hover { color: var(--accent); border-color: var(--accent-line); }
+  .cfs-stage-body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+  .cfs-stage-body .chart-wrap, .cfs-stage-body .sankey-wrap { width: 100%; }
+  .cfs-stage-body svg { width: 100%; height: auto; max-height: 100%; }
+  /* portrait phone → rotate the stage to landscape and fill the screen */
+  @media (max-width: 820px) and (orientation: portrait) {
+    .cfs-stage { width: 100vh; height: 100vw; transform: translateX(100vw) rotate(90deg); }
+  }
+
+  /* ============================================================
+     ACCOUNTS — drag-to-reorder (live, like the Budget page)
+     ============================================================ */
+  .acct-grip {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 30px; margin-left: -6px; flex-shrink: 0;
+    color: var(--muted); opacity: 0; cursor: grab; touch-action: none;
+    transition: opacity var(--dur-fast), color var(--dur-fast);
+  }
+  .acct-grip svg { width: 16px; height: 16px; }
+  .acct-row:hover .acct-grip, .acct-row:focus-within .acct-grip { opacity: 0.55; }
+  .acct-grip:hover { opacity: 1; color: var(--text); }
+  .acct-row { transition: background var(--dur-fast), opacity var(--dur-fast); }
+  .acct-row.dragging { opacity: 0.5; cursor: grabbing; background: var(--hover); }
+
+  /* Per-account holdings shown under an investment account on the Accounts page */
+  .acct-holds { display: flex; flex-direction: column; gap: 0; margin: 2px 0 4px 52px; }
+  .acct-hold {
+    display: flex; align-items: center; gap: 10px; padding: 7px 6px; margin: 0 -6px;
+    border-radius: var(--radius-sm); font-size: var(--text-xs);
+  }
+  .acct-hold + .acct-hold { border-top: 1px solid var(--border); }
+  .acct-hold-mono { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); min-width: 56px; }
+  .acct-hold-name { flex: 1; min-width: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-hold-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .acct-hold.cash .acct-hold-mono { color: var(--green); }
+  .acct-sub-totals { display: flex; gap: 14px; font-size: var(--text-2xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 </style>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
@@ -1788,9 +1866,11 @@
 <script src="_ds/claud-design-system-de602a13-a618-4a60-8ce9-b2eadaeafb01/_ds_bundle.js"></script>
 <script src="/store.js"></script>
 <script src="/actions.js"></script>
+<script src="/regions.js"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="pages.jsx"></script>
 <script type="text/babel" src="features.jsx"></script>
+<script type="text/babel" src="fullscreen-chart.jsx"></script>
 <script type="text/babel" src="investments.jsx"></script>
 <script type="text/babel" src="foresight.jsx"></script>
 <script type="text/babel" src="accounts.jsx"></script>

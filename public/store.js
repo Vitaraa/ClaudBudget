@@ -32,6 +32,18 @@
   var GROUP_ORDER = { Cash: 0, Investments: 1, Credit: 2 };
   function curMonth() { return new Date().toISOString().slice(0, 10).slice(0, 7); }
 
+  // An "investment account" (TFSA, RRSP, 401k, ISA, brokerage, …) holds
+  // securities + a loose cash sleeve. Its stored `balance` is the cash sleeve;
+  // its securities are the holdings whose account_id points at it.
+  function isInvestmentAccount(a) {
+    if (!a) return false;
+    if (a.group_label === 'Investments' || a.group === 'Investments') return true;
+    if (a.kind === 'investment') return true;
+    // Fallback: classify by type name across regions (defensive — the server
+    // normally sets group_label, but never misread a TFSA/401k/ISA/Super).
+    return /tfsa|rrsp|fhsa|rsp|resp|401|\bira\b|roth|\bisa\b|lisa|sipp|pension|super|broker|invest|hsa|share trading|managed fund/i.test(String(a.type || ''));
+  }
+
   // The 3-letter code of the user's chosen display currency. The setting is
   // stored as a label like "CAD — $ Canadian Dollar"; take the leading token.
   // Defaults to CAD (also the app default) when unset.
@@ -208,7 +220,35 @@
     refreshQuotes: refreshQuotes,
     accountNames: function () { return D.accounts.map(function (a) { return a.name; }); },
     accountById: function (id) { return D.accounts.find(function (a) { return a.id === id; }) || null; },
-    isPro: function () { return !!(D.user && D.user.plan === 'pro'); }
+    accountNameById: function (id) { var a = D.accounts.find(function (x) { return x.id === id; }); return a ? a.name : null; },
+    isPro: function () { return !!(D.user && D.user.plan === 'pro'); },
+
+    // ---- investment ⇄ account linking ------------------------------------
+    isInvestmentAccount: isInvestmentAccount,
+    // Every investment account (Investments group / kind 'investment').
+    investmentAccounts: function () { return D.accounts.filter(isInvestmentAccount); },
+    // Holdings assigned to a given account id (live `value` already in display currency).
+    holdingsForAccount: function (accountId) {
+      if (accountId == null) return [];
+      return D.holdings.filter(function (h) { return h.account_id === accountId; });
+    },
+    // Holdings not yet linked to any account.
+    unassignedHoldings: function () { return D.holdings.filter(function (h) { return h.account_id == null; }); },
+    // Value breakdown for an account. For investment accounts the stored balance
+    // is the loose cash sleeve and securities are summed from linked holdings, so
+    // total = cash + securities. Cash/credit accounts: total === their balance.
+    // (Net worth = Σ balances + Σ holdings stays correct: balances never include
+    // securities, holdings are counted once.)
+    accountValue: function (acct) {
+      if (!acct) return { cash: 0, securities: 0, total: 0, isInvestment: false, holdings: [] };
+      var cash = Number(acct.bal != null ? acct.bal : acct.balance) || 0;
+      if (!isInvestmentAccount(acct)) return { cash: cash, securities: 0, total: cash, isInvestment: false, holdings: [] };
+      var list = D.holdings.filter(function (h) { return h.account_id === acct.id; });
+      var secs = 0;
+      for (var i = 0; i < list.length; i++) secs += (Number(list[i].value) || 0);
+      secs = Math.round(secs * 100) / 100;
+      return { cash: cash, securities: secs, total: Math.round((cash + secs) * 100) / 100, isInvestment: true, holdings: list };
+    }
   };
 
   window.useClaudData = function () {

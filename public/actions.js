@@ -12,7 +12,9 @@
   function groupForType(type) {
     var t = String(type || '').toLowerCase();
     if (/credit|card|loan|mortgage|line of credit/.test(t)) return 'Credit';
-    if (/broker|401|ira|roth|retire|invest|hsa|529/.test(t)) return 'Investments';
+    // Investment / tax-advantaged types across all supported regions
+    // (US 401k/IRA/HSA/brokerage, CA TFSA/RRSP/FHSA, UK ISA/LISA/SIPP, AU Super/share).
+    if (/broker|401|ira|roth|retire|invest|hsa|529|tfsa|rrsp|rsp|fhsa|resp|\bisa\b|lisa|sipp|pension|super|share trading|managed fund/.test(t)) return 'Investments';
     return 'Cash';
   }
   function mapAccount(a) {
@@ -35,13 +37,15 @@
     };
   }
   function mapHolding(h) {
+    // account_id links the holding to an investment account; '' / null clears it.
+    var acct = h.account_id !== undefined ? h.account_id : (h.accountId !== undefined ? h.accountId : null);
     if (h.kind === 'cash') {
       var amt = h.value != null ? h.value : (h.amount != null ? h.amount : (h.price || 0));
-      return { ticker: 'CASH', name: h.name, cls: h.cls || 'Cash', kind: 'cash', shares: 1, price: amt, cost: amt };
+      return { ticker: 'CASH', name: h.name, cls: h.cls || 'Cash', kind: 'cash', shares: 1, price: amt, cost: amt, account_id: acct };
     }
     return {
       ticker: h.ticker, name: h.name, cls: h.cls, kind: h.kind,
-      shares: h.shares, price: h.price, cost: h.cost
+      shares: h.shares, price: h.price, cost: h.cost, account_id: acct
     };
   }
 

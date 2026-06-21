@@ -201,6 +201,12 @@ addColumn("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 
 addColumn("ALTER TABLE users ADD COLUMN token_version  INTEGER NOT NULL DEFAULT 0");
 addColumn("ALTER TABLE users ADD COLUMN google_sub     TEXT");
 
+// Link a holding to the investment account that holds it (TFSA, 401(k),
+// brokerage, …). Nullable + ON DELETE SET NULL so unassigned holdings and
+// deleted accounts both degrade gracefully. Plaintext FK (not encrypted) so it
+// stays queryable, exactly like transactions.account_id.
+addColumn("ALTER TABLE holdings ADD COLUMN account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL");
+
 /* ---- At-rest encryption -------------------------------------------------
    Wrap the raw DB so sensitive columns are encrypted on write and decrypted
    on read (see lib/model.js + lib/crypto.js), then encrypt any pre-existing

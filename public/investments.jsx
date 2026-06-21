@@ -9,6 +9,8 @@
    ============================================================ */
 const IV = window.ClaudDesignSystem_de602a || {};
 const { useState: ivUseState } = React;
+/* mobile fullscreen+rotate wrapper for charts; bare passthrough if unavailable */
+const ChartFullscreen = window.ChartFullscreen || (function (p) { return p.children; });
 
 /* ---- format helpers (own names, no collision) ---- */
 const IV_MINUS = "\u2212";
@@ -609,7 +611,9 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
           <span className="cmp-gap" style={{ color: gap >= 0 ? "var(--green)" : "var(--red)" }}>Current holdings {gap >= 0 ? "outpaced" : "trailed"} the market by {Math.abs(gap).toFixed(1)} pts over {period === "All" ? "2 years" : period}</span>
         </div>
 
-        <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Holdings" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
+        <ChartFullscreen title="Holdings vs S&P 500">
+          <InvCompareChart levelsA={pf} levelsB={sp} labels={labels} nameA="Holdings" nameB="S&P 500" colorA="var(--accent)" colorB="var(--muted)" />
+        </ChartFullscreen>
         <div className="alloc-note" style={{ marginTop: 6 }}>Shows how the securities you hold today moved over {period === "All" ? "the last 2 years" : "the last " + period} — as if held the whole time — for market context. It is not your personal return; for that, see Total return{invCb.hasCost ? " (" + invPct(invTotalRet) + ")" : ""} above.</div>
       </Card>
 
@@ -641,7 +645,7 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
                     <span className="hold-mono">{h.cls === "Cash" ? "$" : h.ticker}</span>
                     <div className="hold-body">
                       <span className="hold-name">{h.name}</span>
-                      <span className="hold-meta">{h.cls}{h.shares != null && ` · ${h.shares} sh · ${invMoney(h.price, 2)}`}</span>
+                      <span className="hold-meta">{h.cls}{h.shares != null && ` · ${h.shares} sh · ${invMoney(h.price, 2)}`}{h.account_id && window.ClaudStore && ClaudStore.accountNameById && ClaudStore.accountNameById(h.account_id) ? " · " + ClaudStore.accountNameById(h.account_id) : ""}</span>
                     </div>
                     <div className="hold-weight" title={`${(h.value / totalValue * 100).toFixed(1)}% of portfolio`}>
                       <span className="hw-pct">{(h.value / totalValue * 100).toFixed(1)}%</span>
@@ -752,7 +756,12 @@ function InvestmentModal({ modal, onClose, onSave, onDelete }) {
   const editing = modal.mode === "edit";
   const src = editing ? modal.holding : null;
 
+  // Investment accounts (TFSA, 401(k), Brokerage…) to assign this holding to.
+  const invAccts = (window.ClaudStore && ClaudStore.investmentAccounts && ClaudStore.investmentAccounts()) || [];
+  const firstInvestmentAccountId = invAccts.length ? invAccts[0].id : "";
+
   const [cls, setCls] = ivUseState(src ? src.cls : "CAD stocks");
+  const [accountId, setAccountId] = ivUseState(src ? (src.account_id || "") : (firstInvestmentAccountId || ""));
   const [ticker, setTicker] = ivUseState(src ? src.ticker : "");
   const [name, setName] = ivUseState(src ? src.name : "");
   const [kind, setKind] = ivUseState(src ? src.kind : "stock");
@@ -795,6 +804,7 @@ function InvestmentModal({ modal, onClose, onSave, onDelete }) {
       ticker: t,
       name: name.trim(),
       cls, kind: kindOut,
+      account_id: accountId,
       shares: isCash ? null : sh,
       price: isCash ? null : pr,
       cost,
@@ -819,6 +829,18 @@ function InvestmentModal({ modal, onClose, onSave, onDelete }) {
             <span>Asset class</span>
             {Segmented && <Segmented options={INV_CLASS_OPTS} value={cls} onChange={setCls} />}
           </div>
+
+          <label className="fs-field full">
+            <span>Account</span>
+            {invAccts.length > 0 ?
+              <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">Unassigned</option>
+                {invAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select> :
+              <span className="fs-foot-note" style={{ color: "var(--muted)" }}>
+                Create an investment account (TFSA, 401(k), Brokerage…) on the Accounts page to assign this holding.
+              </span>}
+          </label>
 
           {!isCash &&
             <div className="fs-field">
@@ -1031,7 +1053,9 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
           <span className="cmp-chip"><span className="cmp-dot" style={{ background: periodUp ? "var(--green)" : "var(--red)" }} />{period}<b style={{ color: periodUp ? "var(--green)" : "var(--red)" }}>{invSigned(periodChg, 2)} ({invPct(periodChgPct)})</b></span>
         </div>
 
-        <InvPriceChart data={series} xLabels={INV_XLABELS[period]} up={periodUp} />
+        <ChartFullscreen title={(h.ticker || h.name) + " · " + period}>
+          <InvPriceChart data={series} xLabels={INV_XLABELS[period]} up={periodUp} />
+        </ChartFullscreen>
       </Card>
 
       {/* Position + key statistics */}

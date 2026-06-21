@@ -13,6 +13,10 @@
 const FS = window.ClaudDesignSystem_de602a || {};
 const { useState: fsUseState, useMemo: fsUseMemo, useRef: fsUseRef, useEffect: fsUseEffect } = React;
 
+/* Mobile fullscreen+rotate wrapper for the projection chart (loaded before this
+   file on window). The fallback renders children bare if the global is missing. */
+const ChartFullscreen = window.ChartFullscreen || (function (p) { return p.children; });
+
 /* ---------------------------------- format ---- */
 const FS_MINUS = "\u2212";
 const fsMoney = (n, dec = 0) => {
@@ -851,8 +855,10 @@ function ForesightPage() {
           </div>
         </div>
 
-        <FsChart series={series} markers={markers} age={fsAge}
-          onDragYear={dragYear} onCommit={commitDrag} onClickMarker={openEdit} />
+        <ChartFullscreen title="Foresight projection">
+          <FsChart series={series} markers={markers} age={fsAge}
+            onDragYear={dragYear} onCommit={commitDrag} onClickMarker={openEdit} />
+        </ChartFullscreen>
 
         <ul className="fs-legend">
           {!sortedMarkers.length &&

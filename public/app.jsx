@@ -6,6 +6,8 @@
 const DS = window.ClaudDesignSystem_de602a || {};
 const { Card, Button, Badge, ProgressBar } = DS;
 const { useState, useEffect, useRef } = React;
+// Mobile fullscreen+rotate chart wrapper (fullscreen-chart.jsx loads before us).
+const ChartFullscreen = window.ChartFullscreen;
 
 /* ---------------------------------- format helpers ---- */
 const MINUS = "\u2212";
@@ -375,39 +377,73 @@ function Sparkline({ data }) {
    ACCOUNTS PAGE
    ============================================================ */
 function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon }) {
+  useClaudData(); // re-render with live quotes/holdings so investment totals stay fresh
+  const ST = window.ClaudStore;
   const flat = [...ACCOUNT_GROUPS.flatMap((g) => g.accounts.map((a) => ({ ...a, group: g.label }))), ...added].filter((a) => !deleted.includes(a.name));
-  const assets = flat.filter((a) => a.bal > 0).reduce((s, a) => s + a.bal, 0);
-  const liabilities = flat.filter((a) => a.bal < 0).reduce((s, a) => s + Math.abs(a.bal), 0);
+  // An account's headline value: investment accounts show cash sleeve + their
+  // securities (via accountValue); everything else shows its balance. Keeps the
+  // KPI strip consistent with the per-account rows and the dashboard net worth.
+  const acctVal = (a) => (ST && ST.isInvestmentAccount && ST.isInvestmentAccount(a)) ? ST.accountValue(a).total : a.bal;
+  // Holdings not yet linked to any account still count toward net worth; they're
+  // surfaced in their own section below so they're visible before assignment.
+  const unassigned = (ST && ST.unassignedHoldings) ? ST.unassignedHoldings() : [];
+  const unassignedTotal = unassigned.reduce((s, h) => s + (Number(h.value) || 0), 0);
+  const assets = flat.filter((a) => acctVal(a) > 0).reduce((s, a) => s + acctVal(a), 0) + Math.max(0, unassignedTotal);
+  const liabilities = flat.filter((a) => acctVal(a) < 0).reduce((s, a) => s + Math.abs(acctVal(a)), 0);
   const net = assets - liabilities;
 
   const openRow = (name) => onOpen && onOpen(name);
 
-  // drag-to-reorder (within a group). Only the grip starts a drag; rows are the
-  // drop targets. We persist one global order (group order preserved) via the
-  // accounts.sort column through ClaudActions.reorderAccounts.
-  const [drag, setDrag] = useState(null);       // { group, id, name }
-  const [overName, setOverName] = useState(null);
-  const groupAccts = (label) =>
+  // drag-to-reorder (within a group). Only the grip starts a drag; the list
+  // reorders LIVE under the cursor on dragOver (like the Budget page) by holding
+  // a local order override for the active group; on drop we persist the final
+  // order ONCE via ClaudActions.reorderAccounts (better than re-persisting every
+  // move). The override stays until the store refresh re-sorts, to avoid flicker.
+  const [drag, setDrag] = useState(null);          // { group, name }
+  const [order, setOrder] = useState(null);        // { group, names:[...] } live override
+  const baseGroupAccts = (label) =>
     [...(((ACCOUNT_GROUPS.find((g) => g.label === label) || {}).accounts) || []), ...added.filter((a) => a.group === label)]
       .filter((a) => !deleted.includes(a.name));
-  function commitReorder(groupLabel, targetName) {
-    const d = drag;
-    setDrag(null); setOverName(null);
-    if (!d || d.group !== groupLabel || d.name === targetName) return;
-    const order = [];
-    ACCOUNT_GROUPS.forEach((g) => {
-      let list = groupAccts(g.label);
-      if (g.label === groupLabel) {
-        const moved = list.find((a) => a.name === d.name);
-        list = list.filter((a) => a.name !== d.name);
-        let ti = targetName == null ? list.length : list.findIndex((a) => a.name === targetName);
-        if (ti < 0) ti = list.length;
-        if (moved) list.splice(ti, 0, moved);
-      }
-      list.forEach((a) => { if (a.id != null) order.push(a.id); });
+  // Accounts for a group, applying any live drag override (by name).
+  const orderedAccts = (label) => {
+    const accts = baseGroupAccts(label);
+    if (!order || order.group !== label) return accts;
+    const byName = {}; accts.forEach((a) => { byName[a.name] = a; });
+    const out = order.names.map((n) => byName[n]).filter(Boolean);
+    // include any not-yet-seen accounts (defensive) so nothing disappears
+    accts.forEach((a) => { if (!order.names.includes(a.name)) out.push(a); });
+    return out;
+  };
+  // Live splice: move the dragged row to the hovered row's index within the group.
+  const moveOver = (groupLabel, fromName, toName) => {
+    if (!fromName || fromName === toName) return;
+    setOrder((prev) => {
+      const names = (prev && prev.group === groupLabel ? prev.names.slice() : baseGroupAccts(groupLabel).map((a) => a.name));
+      const fi = names.indexOf(fromName);
+      let ti = names.indexOf(toName);
+      if (fi < 0 || ti < 0) return prev;
+      names.splice(fi, 1);
+      if (ti > fi) ti -= 1;            // account for the removed item before the target
+      names.splice(ti, 0, fromName);
+      return { group: groupLabel, names };
     });
-    if (order.length && window.ClaudActions) window.ClaudActions.reorderAccounts(order);
-  }
+  };
+  // Persist the FINAL order once. Group order is preserved; only the dragged
+  // group uses the live override.
+  const commitReorder = () => {
+    const o = order, d = drag;
+    setDrag(null);
+    if (!o || !d) { setOrder(null); return; }
+    const ids = [];
+    ACCOUNT_GROUPS.forEach((g) => {
+      const list = (g.label === o.group) ? orderedAccts(g.label) : baseGroupAccts(g.label);
+      list.forEach((a) => { if (a.id != null) ids.push(a.id); });
+    });
+    // keep the override until the store refresh lands, then clear it
+    if (ids.length && window.ClaudActions) {
+      Promise.resolve(window.ClaudActions.reorderAccounts(ids)).then(() => setOrder(null), () => setOrder(null));
+    } else { setOrder(null); }
+  };
 
   const empty = flat.length === 0;
   const creditCount = flat.filter((a) => a.bal < 0).length;
@@ -442,9 +478,11 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
         </div>}
 
       {ACCOUNT_GROUPS.map((g) => {
-        const accts = [...g.accounts, ...added.filter((a) => a.group === g.label)].filter((a) => !deleted.includes(a.name));
+        const accts = orderedAccts(g.label);
         if (accts.length === 0) return null;
-        const sub = accts.reduce((s, a) => s + a.bal, 0);
+        // Subtotal: investment accounts contribute cash + securities (via
+        // accountValue helper above), everything else contributes its balance.
+        const sub = accts.reduce((s, a) => s + acctVal(a), 0);
         return (
           <Card widget key={g.label}>
             <div className="widget-head">
@@ -453,20 +491,25 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
             </div>
             <div className="acct-rows"
               onDragOver={(e) => { if (drag && drag.group === g.label) e.preventDefault(); }}
-              onDrop={(e) => { e.preventDefault(); commitReorder(g.label, null); }}>
-              {accts.map((a) =>
-              <div className="acct-row clickable" key={a.name} role="button" tabIndex={0}
+              onDrop={(e) => { e.preventDefault(); commitReorder(); }}>
+              {accts.map((a) => {
+                const isInv = !!(ST && ST.isInvestmentAccount && ST.isInvestmentAccount(a));
+                const val = isInv ? ST.accountValue(a) : null;
+                const dispBal = isInv ? val.total : a.bal;        // total includes securities for display only
+                const holds = isInv ? ((ST.holdingsForAccount && ST.holdingsForAccount(a.id)) || []) : [];
+                const dragging = drag && drag.group === g.label && drag.name === a.name;
+                return (
+              <React.Fragment key={a.name}>
+              <div className={"acct-row clickable" + (dragging ? " dragging" : "")} role="button" tabIndex={0}
                 onClick={() => openRow(a.name)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(a.name); } }}
-                onDragOver={(e) => { if (drag && drag.group === g.label && drag.name !== a.name) { e.preventDefault(); setOverName(a.name); } }}
-                onDragLeave={() => setOverName((cur) => (cur === a.name ? null : cur))}
-                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitReorder(g.label, a.name); }}
-                style={overName === a.name ? { boxShadow: "inset 0 2px 0 0 var(--accent)" } : undefined}>
+                onDragOver={(e) => { if (drag && drag.group === g.label && drag.name !== a.name) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveOver(g.label, drag.name, a.name); } }}
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitReorder(); }}>
                   <span className="acct-grip" title="Drag to reorder" aria-label="Drag to reorder"
                     draggable={a.id != null}
                     onClick={(e) => e.stopPropagation()}
-                    onDragStart={(e) => { setDrag({ group: g.label, id: a.id, name: a.name }); try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", a.name); } catch (_) {} }}
-                    onDragEnd={() => { setDrag(null); setOverName(null); }}
+                    onDragStart={(e) => { setDrag({ group: g.label, name: a.name }); setOrder({ group: g.label, names: baseGroupAccts(g.label).map((x) => x.name) }); try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", a.name); } catch (_) {} }}
+                    onDragEnd={() => commitReorder()}
                     style={{ cursor: "grab", color: "var(--muted)", fontSize: 15, lineHeight: 1, userSelect: "none", flexShrink: 0 }}>{"\u283F"}</span>
                   <IconPicker className="acct-ico" value={iconOv[a.name] || a.icon} onPick={(n) => onSetIcon && onSetIcon(a.name, n)} />
                   <div className="acct-row-body">
@@ -475,16 +518,52 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
                   </div>
                   <Sparkline data={a.trend} />
                   <div className="acct-row-right">
-                    <span className={"acct-row-bal " + (a.bal < 0 ? "neg" : "")}>{money(a.bal, 2)}</span>
+                    <span className={"acct-row-bal " + (dispBal < 0 ? "neg" : "")}>{money(dispBal, 2)}</span>
                     <span className={"acct-row-chg " + (a.chg >= 0 ? "pos" : "neg")}>{signed(a.chg, 0)}</span>
                   </div>
                   <span className="acct-chev"><Icon name="chevR" /></span>
                 </div>
-              )}
+                {isInv &&
+                  <div className="acct-holds">
+                    {holds.map((h) =>
+                      <div className="acct-hold" key={h.id != null ? h.id : (h.ticker || h.name)}>
+                        <span className="acct-hold-mono">{h.kind === "cash" || !h.ticker ? "$" : h.ticker}</span>
+                        <span className="acct-hold-name">{h.name}</span>
+                        <span className="acct-hold-val">{money(Number(h.value) || 0, 2)}</span>
+                      </div>
+                    )}
+                    <div className="acct-hold cash">
+                      <span className="acct-hold-mono">$</span>
+                      <span className="acct-hold-name">Cash</span>
+                      <span className="acct-hold-val">{money(a.bal, 2)}</span>
+                    </div>
+                  </div>}
+                </React.Fragment>);
+              })}
             </div>
           </Card>);
 
       })}
+
+      {unassigned.length > 0 &&
+        <Card widget>
+          <div className="widget-head">
+            <span className="widget-title">Unassigned holdings</span>
+            <span className="group-sub muted">{unassigned.length} holding{unassigned.length === 1 ? "" : "s"} <b>{money(unassignedTotal, 2)}</b></span>
+          </div>
+          <div className="acct-holds" style={{ marginLeft: 0 }}>
+            {unassigned.map((h) =>
+              <div className="acct-hold" key={h.id != null ? h.id : (h.ticker || h.name)}>
+                <span className="acct-hold-mono">{h.kind === "cash" || !h.ticker ? "$" : h.ticker}</span>
+                <span className="acct-hold-name">{h.name}</span>
+                <span className="acct-hold-val">{money(Number(h.value) || 0, 2)}</span>
+              </div>
+            )}
+          </div>
+          <div className="acct-sub-totals" style={{ marginTop: 10 }}>
+            Not linked to an account yet — open a holding in Investments to assign it to a registered or brokerage account.
+          </div>
+        </Card>}
     </React.Fragment>);
 
 }
@@ -1282,7 +1361,9 @@ function CashFlowPage() {
           </div>
         </div>
         {(flow.income.length || flow.out.length) ?
-          <Sankey income={flow.income} out={flow.out} monthLabel="this month" /> :
+          (window.ChartFullscreen
+            ? <ChartFullscreen title="Cash flow"><Sankey income={flow.income} out={flow.out} monthLabel="this month" /></ChartFullscreen>
+            : <Sankey income={flow.income} out={flow.out} monthLabel="this month" />) :
           <div className="sk-cap" style={{ padding: "28px 0", textAlign: "center" }}>No money has moved yet this month. Add income and expense transactions to see your flow.</div>}
         <div className="sk-cap">Tip: hover any flow to trace a dollar from its source — or click a band to see the transactions behind it.</div>
       </Card>
@@ -1464,6 +1545,14 @@ function SettingsModal({ t, setTweak, onClose, currency, setCurrency, cycleStart
             }
             {sec === "Preferences" &&
             <React.Fragment>
+              <Row title="Country / region" desc="Tailors account types and institutions to where you bank.">
+                <select className="set-select"
+                  value={((window.ClaudRegions && ClaudRegions.current()) || {}).code || "CA"}
+                  onChange={(e) => { if (window.ClaudActions) ClaudActions.saveSettings({ country: e.target.value }); }}>
+                  {(window.ClaudRegions ? ClaudRegions.list() : []).map((r) =>
+                    <option key={r.code} value={r.code}>{r.flag} {r.name}</option>)}
+                </select>
+              </Row>
               <Row title="Currency" desc="How money is displayed throughout ClaudBudget.">
                 <select className="set-select" value={currency} onChange={(e) => setCurrency(e.target.value)}>
                   {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1955,6 +2044,23 @@ function FirstRunSetup({ onClose }) {
   const [useReco, setUseReco] = useState(false);
   const [income, setIncome] = useState("");
   const [busy, setBusy] = useState(false);
+  // Step 0 = country/region, step 1 = budget categories. Country defaults to the
+  // app's historical default (Canada); picking one also defaults the currency.
+  const [step, setStep] = useState(0);
+  const [country, setCountry] = useState(() => ((window.ClaudRegions && ClaudRegions.current()) || {}).code || "CA");
+  const [currency, setCurrency] = useState(() => {
+    const sv = (window.ClaudData && ClaudData.settings) || {};
+    return sv.currency || CURRENCIES[0];
+  });
+  // Map a 3-letter currency code (e.g. 'USD') to the matching CURRENCIES label.
+  const currencyLabelFor = (code) => CURRENCIES.find((c) => c.split(/[\s—-]/)[0] === code) || null;
+  const pickCountry = (code) => {
+    setCountry(code);
+    if (window.ClaudRegions) {
+      const lbl = currencyLabelFor(ClaudRegions.currencyFor(code));
+      if (lbl) setCurrency(lbl);
+    }
+  };
 
   useEffect(() => {
     function onKey(e) { if (e.key === "Escape") onClose(); }
@@ -2021,7 +2127,11 @@ function FirstRunSetup({ onClose }) {
       }
     }
     const done = () => {
-      const flip = (API ? API.put("/api/settings", { onboarded: true }).catch(() => {}) : Promise.resolve());
+      // Persist country + currency alongside the onboarded flip in one PUT.
+      const save = { onboarded: true };
+      if (country) save.country = country;
+      if (currency) save.currency = currency;
+      const flip = (API ? API.put("/api/settings", save).catch(() => {}) : Promise.resolve());
       flip.then(() => {
         if (window.ClaudStore && ClaudStore.refresh) ClaudStore.refresh().catch(() => {});
         onClose();
@@ -2051,9 +2161,33 @@ function FirstRunSetup({ onClose }) {
     <div className="set-overlay" onClick={(e) => { if (e.target === e.currentTarget) skip(); }}>
       <div className="set-modal" role="dialog" aria-modal="true" aria-label="Set up your budget" style={{ maxWidth: 560 }}>
         <div className="set-head">
-          <h2>Set up your budget</h2>
+          <h2>{step === 0 ? "Where do you bank?" : "Set up your budget"}</h2>
           <button className="set-close" onClick={skip} aria-label="Skip setup">{"×"}</button>
         </div>
+        {step === 0 &&
+        <div className="set-body">
+          <p className="hs-intro" style={{ margin: "6px 0 14px" }}>
+            Pick your country so ClaudBudget speaks your local financial vocabulary — the right account types (TFSA, 401(k), ISA…) and currency. You can change this later in Settings.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "2px 0 4px" }}>
+            {(window.ClaudRegions ? ClaudRegions.list() : []).map((r) => {
+              const on = country === r.code;
+              return (
+                <button key={r.code} type="button" onClick={() => pickCountry(r.code)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                    borderRadius: 10, border: "1px solid " + (on ? "var(--accent)" : "var(--border)"),
+                    background: on ? "var(--accent-soft)" : "var(--input-bg)", color: "var(--text)" }}>
+                  <span style={{ fontSize: 22, lineHeight: 1 }}>{r.flag}</span>
+                  <span style={{ flex: 1 }}>
+                    <span style={{ display: "block", fontSize: "var(--text-sm)", fontWeight: 700 }}>{r.name}</span>
+                    <span style={{ display: "block", fontSize: "var(--text-xs)", color: "var(--muted)" }}>Currency {r.currency}</span>
+                  </span>
+                  {on && <span style={{ color: "var(--accent)", fontWeight: 700 }}>{"✓"}</span>}
+                </button>);
+            })}
+          </div>
+        </div>}
+        {step === 1 &&
         <div className="set-body">
           <p className="hs-intro" style={{ margin: "6px 0 14px" }}>
             Welcome to ClaudBudget. We've started you with a set of categories — keep the ones you want, and we'll track your spending against them.
@@ -2110,11 +2244,16 @@ function FirstRunSetup({ onClose }) {
             {useReco && !hasIncome &&
               <p className="srl-d" style={{ margin: "8px 0 0", color: "var(--muted)" }}>Enter an income above to preview the recommended amounts.</p>}
           </div>
-        </div>
+        </div>}
         <div className="set-foot">
-          <span className="set-note">{keptCount} categor{keptCount === 1 ? "y" : "ies"} selected{hasIncome ? " · amounts from 50/30/20" : ""}.</span>
+          {step === 0
+            ? <span className="set-note">Defaults to Canada — pick another to localize accounts &amp; currency.</span>
+            : <span className="set-note">{keptCount} categor{keptCount === 1 ? "y" : "ies"} selected{hasIncome ? " · amounts from 50/30/20" : ""}.</span>}
+          {step === 1 && Button && <Button variant="ghost" size="sm" onClick={() => setStep(0)} disabled={busy}>Back</Button>}
           {Button && <Button variant="ghost" size="sm" onClick={skip} disabled={busy}>Skip for now</Button>}
-          {Button && <Button variant="primary" size="sm" onClick={finish} disabled={busy}>{busy ? "Saving…" : "Finish setup"}</Button>}
+          {step === 0
+            ? (Button && <Button variant="primary" size="sm" onClick={() => setStep(1)} disabled={busy}>Continue</Button>)
+            : (Button && <Button variant="primary" size="sm" onClick={finish} disabled={busy}>{busy ? "Saving…" : "Finish setup"}</Button>)}
         </div>
       </div>
     </div>);

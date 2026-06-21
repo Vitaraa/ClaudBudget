@@ -704,16 +704,27 @@ function register(router) {
   }));
   router.post('/api/holdings', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id, id = newId('hd_'); const b = ctx.body;
-    db.prepare(`INSERT INTO holdings (id,user_id,ticker,name,cls,kind,shares,price,cost,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
-      id, uid, str(b.ticker, 'ticker'), str(b.name, 'Name', { required: true }), str(b.cls, 'cls'),
+    // Optional link to an investment account; only honored if the account is the user's.
+    const reqAcct = str(b.account_id, 'account_id');
+    const acctId = reqAcct && db.prepare('SELECT id FROM accounts WHERE id=? AND user_id=?').get(reqAcct, uid) ? reqAcct : null;
+    db.prepare(`INSERT INTO holdings (id,user_id,account_id,ticker,name,cls,kind,shares,price,cost,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, uid, acctId, str(b.ticker, 'ticker'), str(b.name, 'Name', { required: true }), str(b.cls, 'cls'),
       str(b.kind, 'kind') || 'etf', num(b.shares, 'shares'), num(b.price, 'price'),
       b.cost != null ? num(b.cost, 'cost') : null, nowISO());
     ctx.json(200, { holding: holdingRow(ownedRow('holdings', id, uid)) });
   }));
   router.put('/api/holdings/:id', auth.requireAuth(async (req, res, ctx) => {
     const row = ownedRow('holdings', ctx.params.id, ctx.user.id); const b = ctx.body;
-    db.prepare('UPDATE holdings SET ticker=?,name=?,cls=?,kind=?,shares=?,price=?,cost=? WHERE id=? AND user_id=?').run(
+    // Reassign to a (validated, owned) investment account when account_id is sent;
+    // an empty value clears the link. Absent key leaves the existing link as-is.
+    let acctId = row.account_id;
+    if (b.account_id !== undefined) {
+      const reqAcct = str(b.account_id, 'account_id');
+      acctId = reqAcct && db.prepare('SELECT id FROM accounts WHERE id=? AND user_id=?').get(reqAcct, ctx.user.id) ? reqAcct : null;
+    }
+    db.prepare('UPDATE holdings SET account_id=?,ticker=?,name=?,cls=?,kind=?,shares=?,price=?,cost=? WHERE id=? AND user_id=?').run(
+      acctId,
       b.ticker != null ? str(b.ticker, 'ticker') : row.ticker,
       b.name != null ? str(b.name, 'Name') : row.name,
       b.cls != null ? str(b.cls, 'cls') : row.cls,
