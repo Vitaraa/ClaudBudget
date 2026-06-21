@@ -15,12 +15,39 @@ if (maj < 22 || (maj === 22 && min < 5)) {
 
 const http = require('node:http');
 const path = require('node:path');
+const fs = require('node:fs');
 const { createRouter, sendJson, sendError, readBody, safeJoin, serveFile, HttpError } = require('./lib/http');
 const { register } = require('./routes');
 const { DB_PATH } = require('./lib/db');
 
 const PORT = process.env.PORT || 4317;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+// Changes on every deploy (the service restarts), so the version below differs
+// and the cache-busted asset URLs in the page shells point at fresh files.
+const ASSET_VERSION = Date.now().toString(36);
+
+// Serve a page shell with a per-deploy ?v= appended to every local .js/.jsx/.css
+// reference. The shell HTML is served no-cache (and Cloudflare leaves HTML
+// "DYNAMIC"/uncached), so a deploy is picked up immediately even though static
+// assets sit behind Cloudflare's multi-hour Browser Cache TTL. External URLs
+// (https://…, e.g. React/Babel CDNs) and refs that already have a query string
+// are left untouched so their integrity hashes keep matching.
+function serveShell(res, filePath) {
+  let html;
+  try { html = fs.readFileSync(filePath, 'utf8'); } catch { return false; }
+  html = html.replace(/(\s(?:src|href)=)(["'])([^"']+?\.(?:js|jsx|css))\2/g, (m, attr, q, url) =>
+    (/^https?:\/\//i.test(url) || url.includes('?')) ? m : attr + q + url + '?v=' + ASSET_VERSION + q
+  );
+  const body = Buffer.from(html, 'utf8');
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': body.length,
+    'Cache-Control': 'no-cache'
+  });
+  res.end(body);
+  return true;
+}
 
 const router = createRouter();
 register(router);
@@ -61,7 +88,7 @@ const server = http.createServer(async (req, res) => {
 
     /* ---- Page shells (clean URLs) ---- */
     if (req.method === 'GET' && PAGES[pathname]) {
-      if (serveFile(res, path.join(PUBLIC_DIR, PAGES[pathname]))) return;
+      if (serveShell(res, path.join(PUBLIC_DIR, PAGES[pathname]))) return;
       return sendError(res, 404, 'Page not found');
     }
 
