@@ -2186,6 +2186,7 @@ function App() {
     ["dark", "surface", "accent", "density", "insightsPlacement", "recurringView", "goalsLayout", "coverStyle"].forEach((k) => { if (sv[k] !== undefined && sv[k] !== null) patch[k] = sv[k]; });
     if (Object.keys(patch).length) setTweak(patch);
     if (sv.cycleStart) setCycleStart(sv.cycleStart);
+    if (sv.currency) setCurrency(sv.currency);
   }, [ClaudData.ready]);
 
   // First-run: open the setup modal the first time the user opens the Budget
@@ -2209,6 +2210,15 @@ function App() {
     if (!didInitSettings.current || !window.ClaudAPI) return;
     ClaudAPI.put("/api/settings", { cycleStart: cycleStart }).then(() => ClaudStore.refresh()).catch(() => {});
   }, [cycleStart]);
+
+  // Persist the display currency, then refresh quotes so foreign holdings are
+  // re-converted at the new currency's live FX rates without a full reload.
+  useEffect(() => {
+    if (!didInitSettings.current || !window.ClaudAPI) return;
+    ClaudData.settings = Object.assign({}, ClaudData.settings, { currency: currency });
+    ClaudAPI.put("/api/settings", { currency: currency }).catch(() => {});
+    if (window.ClaudStore && window.ClaudStore.refreshQuotes) window.ClaudStore.refreshQuotes();
+  }, [currency]);
   const openAcct = tab === "Accounts" && acctOpen ? (findAccount(acctOpen) || addedAccts.find((a) => a.name === acctOpen) || null) : null;
   const openHolding = tab === "Investments" && openHoldingId ? (holdings.find((h) => h.id === openHoldingId) || null) : null;
   const portfolioTotal = holdings.reduce((s, h) => s + h.value, 0);
