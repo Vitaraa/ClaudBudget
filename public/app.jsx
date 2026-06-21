@@ -373,6 +373,16 @@ function Sparkline({ data }) {
 
 }
 
+/* Per-account "show holdings" disclosure state, persisted locally (same idea as
+   the category-order pref). Investment accounts start COLLAPSED so a long
+   position list stays tidy; each account remembers its own open/closed choice. */
+const HOLDS_OPEN_KEY = "claud:holdsOpen";
+function loadHoldsOpen() {
+  try { const v = JSON.parse(localStorage.getItem(HOLDS_OPEN_KEY)); return (v && typeof v === "object") ? v : {}; }
+  catch (e) { return {}; }
+}
+function saveHoldsOpen(map) { try { localStorage.setItem(HOLDS_OPEN_KEY, JSON.stringify(map)); } catch (e) {} }
+
 /* ============================================================
    ACCOUNTS PAGE
    ============================================================ */
@@ -401,6 +411,9 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
   // move). The override stays until the store refresh re-sorts, to avoid flicker.
   const [drag, setDrag] = useState(null);          // { group, name }
   const [order, setOrder] = useState(null);        // { group, names:[...] } live override
+  // which investment accounts have their holdings expanded (persisted; default collapsed)
+  const [holdsOpen, setHoldsOpen] = useState(loadHoldsOpen);
+  const toggleHolds = (key) => setHoldsOpen((prev) => { const next = { ...prev, [key]: !prev[key] }; saveHoldsOpen(next); return next; });
   const baseGroupAccts = (label) =>
     [...(((ACCOUNT_GROUPS.find((g) => g.label === label) || {}).accounts) || []), ...added.filter((a) => a.group === label)]
       .filter((a) => !deleted.includes(a.name));
@@ -498,6 +511,8 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
                 const dispBal = isInv ? val.total : a.bal;        // total includes securities for display only
                 const holds = isInv ? ((ST.holdingsForAccount && ST.holdingsForAccount(a.id)) || []) : [];
                 const dragging = drag && drag.group === g.label && drag.name === a.name;
+                const hkey = String(a.id != null ? a.id : a.name);
+                const holdsShown = holds.length > 0 && !!holdsOpen[hkey];
                 return (
               <React.Fragment key={a.name}>
               <div className={"acct-row clickable" + (dragging ? " dragging" : "")} role="button" tabIndex={0}
@@ -523,20 +538,29 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
                   </div>
                   <span className="acct-chev"><Icon name="chevR" /></span>
                 </div>
-                {isInv &&
-                  <div className="acct-holds">
-                    {holds.map((h) =>
-                      <div className="acct-hold" key={h.id != null ? h.id : (h.ticker || h.name)}>
-                        <span className="acct-hold-mono">{h.kind === "cash" || !h.ticker ? "$" : h.ticker}</span>
-                        <span className="acct-hold-name">{h.name}</span>
-                        <span className="acct-hold-val">{money(Number(h.value) || 0, 2)}</span>
-                      </div>
-                    )}
-                    <div className="acct-hold cash">
-                      <span className="acct-hold-mono">$</span>
-                      <span className="acct-hold-name">Cash</span>
-                      <span className="acct-hold-val">{money(a.bal, 2)}</span>
-                    </div>
+                {isInv && holds.length > 0 &&
+                  <div className="acct-holds-wrap">
+                    <button className="acct-holds-toggle" type="button" aria-expanded={holdsShown}
+                      title={holdsShown ? "Hide holdings" : "Show holdings"}
+                      onClick={(e) => { e.stopPropagation(); toggleHolds(hkey); }}>
+                      <span className="aht-caret"><Icon name="chevR" /></span>
+                      <span className="aht-label">{holds.length} holding{holds.length === 1 ? "" : "s"}</span>
+                    </button>
+                    {holdsShown &&
+                      <div className="acct-holds">
+                        {holds.map((h) =>
+                          <div className="acct-hold" key={h.id != null ? h.id : (h.ticker || h.name)}>
+                            <span className="acct-hold-mono">{h.kind === "cash" || !h.ticker ? "$" : h.ticker}</span>
+                            <span className="acct-hold-name">{h.name}</span>
+                            <span className="acct-hold-val">{money(Number(h.value) || 0, 2)}</span>
+                          </div>
+                        )}
+                        <div className="acct-hold cash">
+                          <span className="acct-hold-mono">$</span>
+                          <span className="acct-hold-name">Cash</span>
+                          <span className="acct-hold-val">{money(a.bal, 2)}</span>
+                        </div>
+                      </div>}
                   </div>}
                 </React.Fragment>);
               })}

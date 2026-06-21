@@ -18,6 +18,33 @@
    outside ./data.
    ============================================================ */
 
+const fs = require('node:fs');
+const path = require('node:path');
+
+// Preflight: the server encrypts sensitive columns (names, tickers, …) at rest.
+// If we let the crypto module fall through to GENERATING a key, we'd write a
+// throwaway .claud-enc.key and then fail to read your real data ("unable to
+// authenticate data"). So refuse to run unless the SAME key the app uses is
+// available — either CLAUD_ENC_KEY / CLAUD_ENC_KEY_FILE in the env, or an
+// existing key file at the project root.
+(function requireEncKey() {
+  const hasEnv = !!(process.env.CLAUD_ENC_KEY || process.env.CLAUD_ENC_KEY_FILE);
+  const keyFile = path.join(__dirname, '.claud-enc.key');
+  if (hasEnv || fs.existsSync(keyFile)) return;
+  console.error(
+    '\nRefusing to run — no at-rest encryption key found.\n' +
+    'This migration must use the SAME key your server uses, or it cannot read your\n' +
+    '(encrypted) holdings.\n\n' +
+    '  1) Find the key:  sudo systemctl cat claud-budget\n' +
+    '                    (look for CLAUD_ENC_KEY=… or an EnvironmentFile= path,\n' +
+    '                     then: sudo grep CLAUD_ENC_KEY <that-file>)\n' +
+    '  2) Run with it:   CLAUD_ENC_KEY=<key> node migrate-holdings.js --email <addr> --account "TFSA"\n\n' +
+    'If an earlier failed run left a stray (wrong) ' + keyFile + ', delete it first:\n' +
+    '  rm ' + keyFile + '\n'
+  );
+  process.exit(1);
+})();
+
 // Reuse the app's wrapped DB so encrypted columns (names, tickers) decrypt and
 // the holdings.account_id column is guaranteed to exist (db.js adds it on load).
 const { db, DB_PATH } = require('./server/lib/db');
@@ -113,4 +140,16 @@ function run() {
 }
 
 try { run(); }
-catch (e) { console.error('\nMigration failed:', e.message, '\n'); process.exit(1); }
+catch (e) {
+  const m = (e && e.message) ? e.message : String(e);
+  console.error('\nMigration failed:', m, '\n');
+  if (/authenticate|unsupported state|bad decrypt|wrong final block|unable to/i.test(m)) {
+    console.error(
+      'This looks like an ENCRYPTION-KEY MISMATCH — the key in use does not match the\n' +
+      'one your data was encrypted with. Re-run with the server\'s CLAUD_ENC_KEY (see\n' +
+      'the instructions printed when running without a key), and delete any stray\n' +
+      '.claud-enc.key a failed run may have created (it holds the wrong key).\n'
+    );
+  }
+  process.exit(1);
+}
