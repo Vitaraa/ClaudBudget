@@ -759,6 +759,19 @@ function register(router) {
     ctx.json(200, { quotes: data, provider: quotes.providerName(), asOf: Date.now() });
   }));
 
+  // FX rates for converting holdings priced in a foreign currency into the
+  // user's display currency. ?symbols=USD,EUR&base=CAD -> { rates:{CAD:1,USD:1.37,…} }
+  router.get('/api/fx', auth.requireAuth(async (req, res, ctx) => {
+    const base = (ctx.query.get('base') || 'CAD').trim().toUpperCase().slice(0, 3);
+    const raw = (ctx.query.get('symbols') || '').trim();
+    const curs = raw
+      ? raw.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 20)
+      : [];
+    let rates = { [base]: 1 };
+    try { rates = await quotes.getFxRates(curs, base); } catch (e) { console.error('fx failed:', e); }
+    ctx.json(200, { base, rates, asOf: Date.now() });
+  }));
+
   // Single-symbol candle history for the detail-page price chart.
   router.get('/api/quotes/history', auth.requireAuth(async (req, res, ctx) => {
     const symbol = str(ctx.query.get('symbol'), 'symbol', { required: true });

@@ -477,7 +477,9 @@ function invCostBasisReturn(holdings) {
     const isCash = h.cls === "Cash" || h.kind === "cash" || String(h.ticker).toUpperCase() === "CASH";
     if (isCash) continue;
     if (h.shares == null || h.cost == null || !(h.shares * h.cost > 0)) continue;
-    cost += h.shares * h.cost;
+    // h.value is already in the display currency; convert the (native) cost
+    // basis by the same FX factor so gain/return aren't mixing currencies.
+    cost += h.shares * h.cost * (h.fxRate || 1);
     value += h.value;
   }
   const gain = value - cost;
@@ -960,15 +962,25 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
   }
 
   // ---- quote numbers: real when a live feed is present, else a deterministic estimate ----
+  // Live quote fields (prevClose/open/ranges) are in the security's NATIVE
+  // currency, so scale them by the holding's FX factor to match h.price, which
+  // the store already converted to the display currency. Estimate branches are
+  // derived from h.price and are therefore already in the display currency.
+  const rate = h.fxRate || 1;
+  const dispCur = (() => {
+    const c = (window.ClaudData && window.ClaudData.settings && window.ClaudData.settings.currency) || "CAD";
+    return String(c).trim().split(/[\s—-]/)[0].toUpperCase() || "CAD";
+  })();
+  const fxConverted = rate !== 1 && h.currency && h.currency !== dispCur;
   const rnd = invRng(seed);
   const q = h.quote || null;
-  const prevClose = (q && typeof q.prevClose === "number") ? q.prevClose : h.price / (1 + (h.day || 0) / 100);
-  const open = (q && typeof q.open === "number") ? q.open : prevClose * (1 + (rnd() - 0.5) * 0.009);
-  const dayLo = (q && typeof q.dayLow === "number") ? q.dayLow : Math.min(h.price, open, prevClose) * (1 - (0.001 + rnd() * 0.006));
-  const dayHi = (q && typeof q.dayHigh === "number") ? q.dayHigh : Math.max(h.price, open, prevClose) * (1 + (0.001 + rnd() * 0.006));
+  const prevClose = (q && typeof q.prevClose === "number") ? q.prevClose * rate : h.price / (1 + (h.day || 0) / 100);
+  const open = (q && typeof q.open === "number") ? q.open * rate : prevClose * (1 + (rnd() - 0.5) * 0.009);
+  const dayLo = (q && typeof q.dayLow === "number") ? q.dayLow * rate : Math.min(h.price, open, prevClose) * (1 - (0.001 + rnd() * 0.006));
+  const dayHi = (q && typeof q.dayHigh === "number") ? q.dayHigh * rate : Math.max(h.price, open, prevClose) * (1 + (0.001 + rnd() * 0.006));
   const yrStart = h.price / (1 + h.ret / 100);
-  const wkLo = (q && typeof q.wkLow === "number") ? q.wkLow : Math.min(h.price, yrStart) * (0.9 + rnd() * 0.05);
-  const wkHi = (q && typeof q.wkHigh === "number") ? q.wkHigh : Math.max(h.price, yrStart) * (1.04 + rnd() * 0.07);
+  const wkLo = (q && typeof q.wkLow === "number") ? q.wkLow * rate : Math.min(h.price, yrStart) * (0.9 + rnd() * 0.05);
+  const wkHi = (q && typeof q.wkHigh === "number") ? q.wkHigh * rate : Math.max(h.price, yrStart) * (1.04 + rnd() * 0.07);
   const volume = (q && typeof q.volume === "number") ? q.volume : Math.round((2 + rnd() * 55) * 1e6);
   const avgVol = Math.round(volume * (0.8 + rnd() * 0.5));
   const dayDollar = h.value * (h.day || 0) / 100;
@@ -977,8 +989,8 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
   const dp = INV_DPERIODS.find((p) => p.k === period) || INV_DPERIODS[4];
   let series, start;
   if (liveHist && liveHist.length > 1) {
-    series = liveHist;
-    start = liveHist[0];
+    series = liveHist.map((v) => v * rate);   // native closes -> display currency
+    start = series[0];
   } else {
     const periodRet = dp.intraday ? (h.day || 0) : h.ret * dp.f;
     start = h.price / (1 + periodRet / 100);
@@ -988,7 +1000,7 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
   const periodChg = h.price - start;
   const periodChgPct = (h.price / start - 1) * 100;
 
-  const costBasis = h.shares * h.cost;
+  const costBasis = h.shares * h.cost * rate;   // native avg cost -> display currency
   const totalGain = h.value - costBasis;
 
   const Stat = ({ k, v, tone }) =>
@@ -1007,6 +1019,10 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
               {Badge && <Badge tone={h.day >= 0 ? "pos" : "neg"}>{h.day >= 0 ? "\u2191" : "\u2193"} {invSigned(h.price - prevClose, 2)} · {invPct(h.day, 2)}</Badge>}
             </div>
             <div className="acct-detail-sub">{h.day >= 0 ? "Up " : "Down "}{invMoney(Math.abs(dayDollar), 2)} on your position today · at close</div>
+            {fxConverted &&
+              <div className="acct-detail-sub" style={{ color: "var(--muted)" }}>
+                Shown in {dispCur} · converted from {h.currency} at {rate.toFixed(4)}
+              </div>}
           </div>
           {Segmented && <Segmented options={INV_DPERIODS.map((p) => p.k)} value={period} onChange={setPeriod} />}
         </div>
@@ -1029,7 +1045,7 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
           </div>
           <div className="ainfo-list">
             <div className="ainfo-row"><span className="ainfo-k">Shares</span><span className="ainfo-v">{h.shares}</span></div>
-            <div className="ainfo-row"><span className="ainfo-k">Avg cost / share</span><span className="ainfo-v">{invMoney(h.cost, 2)}</span></div>
+            <div className="ainfo-row"><span className="ainfo-k">Avg cost / share</span><span className="ainfo-v">{invMoney(h.cost * rate, 2)}</span></div>
             <div className="ainfo-row"><span className="ainfo-k">Cost basis</span><span className="ainfo-v">{invMoney(costBasis, 2)}</span></div>
             <div className="ainfo-row"><span className="ainfo-k">Today</span><span className="ainfo-v" style={{ color: h.day >= 0 ? "var(--green)" : "var(--red)" }}>{invSigned(dayDollar, 2)}</span></div>
             <div className="ainfo-row"><span className="ainfo-k">Portfolio weight</span><span className="ainfo-v">{(h.value / (portfolioValue || h.value) * 100).toFixed(1)}%</span></div>

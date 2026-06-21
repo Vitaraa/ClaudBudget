@@ -18,7 +18,7 @@
     insights: { items: [], months: [] }, sankey: {}, foresightStartNetWorth: 0,
     accounts: [], transactions: [], rules: [], recurring: [], goals: [],
     holdings: [], foresightPlans: [], foresightOverrides: [],
-    quotes: {}, quotesProvider: null, quotesAsOf: 0,
+    quotes: {}, quotesProvider: null, quotesAsOf: 0, fxRates: {}, fxBase: 'CAD',
     accountGroups: [], netWorthSeries: [], dashCategories: [],
     budgetGroups: [], recent: [], cashflow: []
   };
@@ -31,6 +31,24 @@
   }
   var GROUP_ORDER = { Cash: 0, Investments: 1, Credit: 2 };
   function curMonth() { return new Date().toISOString().slice(0, 10).slice(0, 7); }
+
+  // The 3-letter code of the user's chosen display currency. The setting is
+  // stored as a label like "CAD — $ Canadian Dollar"; take the leading token.
+  // Defaults to CAD (also the app default) when unset.
+  function displayCurrency() {
+    var c = (D.settings && D.settings.currency) || 'CAD';
+    c = String(c).trim().split(/[\s—-]/)[0].toUpperCase();
+    return /^[A-Z]{3}$/.test(c) ? c : 'CAD';
+  }
+  // Multiplier that turns an amount priced in `from` into the display currency.
+  // 1 when same currency or when no rate is available (degrade to no-convert).
+  function fxFactor(from) {
+    var disp = displayCurrency();
+    from = String(from || disp).toUpperCase();
+    if (from === disp) return 1;
+    var r = D.fxRates && D.fxRates[from];
+    return (typeof r === 'number' && r > 0) ? r : 1;
+  }
 
   // This-month net movement for an account, from its transactions.
   function acctChange(accId) {
@@ -109,23 +127,52 @@
   // throws; a missing quote leaves the user's entered price untouched.
   function applyQuotes(map) {
     D.quotes = map || {};
+    var disp = displayCurrency();
     for (var i = 0; i < D.holdings.length; i++) {
       var h = D.holdings[i];
-      if (h.kind === 'cash' || !h.ticker) { if (h.day == null) h.day = 0; continue; }
+      if (h.kind === 'cash' || !h.ticker) { if (h.day == null) h.day = 0; h.currency = disp; h.fxRate = 1; continue; }
       var q = D.quotes[String(h.ticker).toUpperCase()];
       if (q && typeof q.price === 'number' && q.price > 0) {
-        h.price = q.price;
+        var cur = (q.currency || disp).toUpperCase();   // native trading currency
+        var rate = fxFactor(cur);                        // native -> display multiplier
+        h.currency = cur;
+        h.fxRate = rate;
+        h.priceNative = q.price;                         // native price (return % + detail page)
+        h.price = q.price * rate;                        // per-share price in display currency
         h.day = (typeof q.day === 'number') ? q.day : (h.day || 0);
-        h.value = Math.round(h.shares * h.price * 100) / 100;
-        var cost = (h.cost != null ? h.cost : h.price);
-        h.ret = cost > 0 ? Math.round(((h.price / cost) - 1) * 1000) / 10 : 0;
+        h.value = Math.round(h.shares * h.price * 100) / 100;   // value in display currency
+        // Return is a ratio computed in the native currency, so the FX factor
+        // cancels and a same-day buy still reads ~0% whatever the currency.
+        var costNative = (h.cost != null ? h.cost : q.price);
+        h.ret = costNative > 0 ? Math.round(((q.price / costNative) - 1) * 1000) / 10 : 0;
         h.quote = q; h.live = true;
-      } else if (h.day == null) {
-        h.day = 0;            // no live data yet -> flat, never NaN
+      } else {
+        if (h.day == null) h.day = 0;            // no live data yet -> flat, never NaN
+        if (h.fxRate == null) h.fxRate = 1;      // entered price assumed already in display currency
+        if (h.currency == null) h.currency = disp;
       }
     }
   }
-  // Pull live quotes for held tickers, then re-render. Safe offline.
+  // Fetch FX rates for every foreign currency present in `quotes`, relative to
+  // the display currency. Resolves to a rates map (possibly empty); never throws.
+  function fetchFxFor(quotes) {
+    var disp = displayCurrency();
+    var need = {};
+    for (var k in quotes) {
+      if (!Object.prototype.hasOwnProperty.call(quotes, k)) continue;
+      var q = quotes[k];
+      var cur = q && q.currency ? String(q.currency).toUpperCase() : '';
+      if (cur && cur !== disp) need[cur] = 1;
+    }
+    var curs = Object.keys(need);
+    if (!curs.length || !window.ClaudAPI || !window.ClaudAPI.fx) return Promise.resolve({});
+    return window.ClaudAPI.fx(curs, disp)
+      .then(function (f) { return (f && f.rates) || {}; })
+      .catch(function () { return {}; });
+  }
+
+  // Pull live quotes for held tickers (plus the FX rates needed to convert any
+  // foreign holdings into the display currency), then re-render. Safe offline.
   function refreshQuotes() {
     if (!window.ClaudAPI || !window.ClaudAPI.quotes) return Promise.resolve();
     var syms = [];
@@ -135,11 +182,16 @@
     }
     if (!syms.length) { applyQuotes({}); return Promise.resolve(); }
     return window.ClaudAPI.quotes(syms).then(function (r) {
-      applyQuotes(r && r.quotes);
-      D.quotesProvider = r && r.provider;
-      D.quotesAsOf = (r && r.asOf) || Date.now();
-      emit();
-      return r;
+      var quotes = (r && r.quotes) || {};
+      return fetchFxFor(quotes).then(function (rates) {
+        D.fxRates = rates || {};
+        D.fxBase = displayCurrency();
+        applyQuotes(quotes);
+        D.quotesProvider = r && r.provider;
+        D.quotesAsOf = (r && r.asOf) || Date.now();
+        emit();
+        return r;
+      });
     }).catch(function () { applyQuotes(D.quotes || {}); emit(); });
   }
 

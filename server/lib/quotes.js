@@ -241,6 +241,29 @@ async function getQuotes(symbols) {
   return result;
 }
 
+// getFxRates(['USD','EUR'],'CAD') -> { CAD:1, USD:1.37, EUR:1.49 }
+// Each rate is "how many BASE units one FROM-currency unit buys", so a value
+// priced in FROM is converted to BASE by multiplying. Sourced from Yahoo's
+// FX symbols (e.g. USDCAD=X) through the same cached quote path. A pair that
+// can't be loaded comes back null so the caller can fall back to no-convert.
+async function getFxRates(currencies, base) {
+  base = String(base || 'CAD').trim().toUpperCase();
+  const out = {};
+  out[base] = 1;
+  const want = Array.from(new Set((currencies || [])
+    .map((c) => String(c || '').trim().toUpperCase())
+    .filter((c) => c && c !== base && /^[A-Z]{3}$/.test(c))));
+  if (!want.length) return out;
+  const symbols = want.map((c) => c + base + '=X');
+  let q = {};
+  try { q = await getQuotes(symbols); } catch { q = {}; }
+  for (const c of want) {
+    const m = q[c + base + '=X'];
+    out[c] = (m && typeof m.price === 'number' && m.price > 0) ? m.price : null;
+  }
+  return out;
+}
+
 // getHistory('AAPL','1Y') -> { timestamps:[...], closes:[...] } | null
 async function getHistory(symbol, periodKey) {
   const sym = String(symbol || '').trim().toUpperCase();
@@ -322,6 +345,7 @@ async function getPortfolioSeries(holdings, periodKey, benchmarkSymbol = '^GSPC'
 module.exports = {
   providerName,
   getQuotes,
+  getFxRates,
   getHistory,
   getPortfolioSeries,
   // exported for unit testing

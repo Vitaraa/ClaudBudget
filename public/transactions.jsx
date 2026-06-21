@@ -554,11 +554,78 @@ function txParsePdfLines(lines) {
   }
   return out;
 }
+/* ---- column-aware bank-statement parser ------------------------------------
+   Chequing/savings statements print money in separate Withdrawals/Deposits (or
+   Debit/Credit) columns plus a running Balance. The flat line scanner can't tell
+   them apart, so every row looks positive and the rightmost number (the balance)
+   gets mistaken for the amount. Here we read the column header to learn each
+   column's x-position, bucket every money token by where it sits (left=withdrawal
+   → expense, middle=deposit → income, right=balance → ignored), carry the date
+   down to continuation rows, and stitch multi-line descriptions onto the row that
+   carries the amount. Returns [] when there are no such columns, so the caller
+   falls back to txParsePdfLines (credit cards, single-column exports). */
+const TXB_MON = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec";
+const TXB_DATE = new RegExp("^\\s*(\\d{1,2}\\s*(?:" + TXB_MON + ")[a-z]*|(?:" + TXB_MON + ")[a-z]*\\.?\\s*\\d{1,2}(?:,?\\s*\\d{2,4})?|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[\\/\\-.]\\d{1,2}(?:[\\/\\-.]\\d{2,4})?)", "i");
+const TXB_MONEY = /^\(?-?\$?\s?\d[\d,]*\.\d{2}\)?-?$/;
+const TXB_HW = /withdrawal|debit|money out|paid out/i;
+const TXB_HD = /deposit|credit|money in|paid in/i;
+const TXB_HB = /balance/i;
+/* page furniture that must never become a description or a transaction */
+const TXB_FURNITURE = /\b\d+\s+of\s+\d+\b|account statement|details of your account|important information|^from\b.*\bto\b.*\d{4}/i;
+function txParseBankColumns(pages) {
+  let yearHint = new Date().getFullYear();
+  outer: for (const pg of pages) for (const r of pg.rows) { const m = r.text.match(/(20\d{2})/); if (m) { yearHint = +m[1]; break outer; } }
+  let cols = null, curDate = null, buf = [];
+  const out = [];
+  const colOf = (tx) => { let i = 0; while (i < cols.bounds.length && tx >= cols.bounds[i]) i++; return cols.hdrs[i].k; };
+  for (const pg of pages) {
+    for (const r of pg.rows) {                       // (re)detect money-column header; carry forward across pages
+      const hw = r.cells.find((c) => TXB_HW.test(c.s)), hd = r.cells.find((c) => TXB_HD.test(c.s));
+      if (hw && hd) {
+        const hb = r.cells.find((c) => TXB_HB.test(c.s));
+        const sc = r.cells.find((c) => /^desc/i.test(c.s)), dc = r.cells.find((c) => /^date$/i.test(c.s));
+        const hdrs = [{ k: "w", x: hw.x }, { k: "d", x: hd.x }].concat(hb ? [{ k: "b", x: hb.x }] : []);
+        hdrs.sort((a, b) => a.x - b.x);
+        const bounds = []; for (let i = 0; i < hdrs.length - 1; i++) bounds.push((hdrs[i].x + hdrs[i + 1].x) / 2);
+        cols = { hdrs, bounds, descx: sc ? sc.x : (dc ? dc.x + 20 : hw.x - 60), descMax: Math.min(hw.x, hd.x) };
+        break;
+      }
+    }
+    if (!cols) continue;                             // header not seen yet → not a columnar statement
+    for (const r of pg.rows) {
+      const t = r.text;
+      if (TXB_HW.test(t) && TXB_HD.test(t)) continue;                         // the header row itself
+      if (TX_STMT_SKIP.test(t) || TXB_FURNITURE.test(t)) { buf = []; continue; }
+      const dm = t.match(TXB_DATE);
+      if (dm) { const d = txParseDate(dm[1].replace(/(\d)(?=[A-Za-z])/g, "$1 ").replace(/([A-Za-z])(?=\d)/g, "$1 "), yearHint); if (d) curDate = d; }
+      let wd = null, dp = null, bal = false;
+      for (const c of r.cells) {
+        if (!TXB_MONEY.test(c.s)) continue;
+        const v = txParseAmount(c.s); if (v == null) continue;
+        const k = colOf(c.x);
+        if (k === "w") { if (wd == null) wd = Math.abs(v); }
+        else if (k === "d") { if (dp == null) dp = Math.abs(v); }
+        else bal = true;
+      }
+      let desc = r.cells.filter((c) => !TXB_MONEY.test(c.s) && c.x >= (cols.descx - 6) && c.x < cols.descMax).map((c) => c.s).join(" ");
+      if (dm) desc = desc.replace(TXB_DATE, "");
+      desc = desc.replace(/\s+/g, " ").replace(/^[\s\-–·,]+|[\s\-–·,]+$/g, "").trim();
+      if (wd != null || dp != null) {
+        const amt = dp != null ? dp : -wd;                                    // deposit +, withdrawal −
+        const name = (buf.join(" ") + " " + desc).trim();
+        if (curDate && (name.match(/[A-Za-z]/g) || []).length >= 2) out.push({ date: curDate, name, amt });
+        buf = [];
+      } else if (bal) buf = [];                                              // balance-only row = boundary
+      else if (/[A-Za-z]/.test(desc)) buf.push(desc);                       // description-only line → stitch onto next amount
+    }
+  }
+  return out;
+}
 async function txParsePDF(file) {
   const lib = await txLoadPdfJs();
   const data = new Uint8Array(await file.arrayBuffer());
   const pdf = await lib.getDocument({ data }).promise;
-  const lines = [];
+  const lines = [], pages = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const tc = await page.getTextContent();
@@ -568,12 +635,18 @@ async function txParsePDF(file) {
       const y = Math.round(it.transform[5]);
       (byY[y] = byY[y] || []).push({ x: it.transform[4], s: it.str });
     });
+    const rows = [];
     Object.keys(byY).map(Number).sort((a, b) => b - a).forEach((y) => {
-      const line = byY[y].sort((a, b) => a.x - b.x).map((o) => o.s).join(" ").replace(/\s+/g, " ").trim();
-      if (line) lines.push(line);
+      const cells = byY[y].sort((a, b) => a.x - b.x);
+      const line = cells.map((o) => o.s).join(" ").replace(/\s+/g, " ").trim();
+      if (line) { lines.push(line); rows.push({ cells, text: line }); }
     });
+    pages.push({ rows });
   }
-  return { txns: txParsePdfLines(lines), text: lines.join("\n") };
+  // Bank statements (Withdrawals/Deposits/Balance columns) → column parser;
+  // credit-card & single-column exports fall back to the line scanner.
+  const bank = txParseBankColumns(pages);
+  return { txns: bank.length ? bank : txParsePdfLines(lines), text: lines.join("\n") };
 }
 /* dispatch by extension, with a content sniff fallback.
    returns { txns:[{date,name,amt}], hints:Set<last4> } */
