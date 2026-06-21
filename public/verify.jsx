@@ -33,7 +33,7 @@ function Brand() {
         <polyline points="94,134 120,117 139,127 170,105" fill="none" stroke="var(--mark-line, #f6f1e4)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
         <polyline points="156,105 170,105 170,121" fill="none" stroke="var(--mark-line, #f6f1e4)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      <span className="wordmark">Clau<span className="wd-accent">d</span></span>
+      <span className="wordmark">Budge<span className="wd-accent">t</span></span>
     </div>
   );
 }

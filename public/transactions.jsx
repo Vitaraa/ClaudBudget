@@ -611,7 +611,8 @@ function txParseReceiptText(text) {
 async function txOcrReceipt(image) {
   const T = await txLoadTesseract();
   const res = await T.recognize(image, "eng");
-  return txParseReceiptText((res && res.data && res.data.text) || "");
+  const text = (res && res.data && res.data.text) || "";
+  return { ...txParseReceiptText(text), _text: text, _conf: (res && res.data && res.data.confidence != null ? res.data.confidence : 0) };
 }
 
 const txIsoDaysAgo = (n) => {
@@ -710,8 +711,21 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
         const url = ev.target.result;
         setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, url } : r));
         txOcrReceipt(url).then((g) => {
+          // Decide whether this photo is actually a receipt. A real receipt always
+          // carries a price (e.g. 12.99) plus a fair amount of text; a hand, blank
+          // page, or blurry shot has neither — so we fail clearly rather than
+          // fabricate a name/amount from number-noise.
+          const text = g._text || "";
+          const alnum = (text.match(/[A-Za-z0-9]/g) || []).length;
+          const detected = (g.amt != null) && alnum >= 8;
           setRcpts((prev) => prev.map((r) => {
             if (r.id !== id) return r;
+            if (!detected) {
+              return {
+                ...r, status: "failed", name: "", amt: "",
+                note: "We couldn’t detect a receipt in this photo. Make sure the whole receipt is in frame, well-lit, and in focus — then try again."
+              };
+            }
             const amt = g.amt != null ? String(g.amt.toFixed(2)) : "";
             const got = !!(g.merchant || g.amt != null);
             return {
@@ -722,7 +736,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
             };
           }));
         }).catch(() => {
-          setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, status: "ready", note: "Couldn’t read it automatically — add the details below." } : r));
+          setRcpts((prev) => prev.map((r) => r.id === id ? { ...r, status: "failed", name: "", amt: "", note: "We couldn’t read this photo. Please try again with a clearer picture." } : r));
         });
       };
       reader.readAsDataURL(file);
@@ -891,7 +905,15 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                         {r.url ? <img src={r.url} alt={r.fileName} /> : <span className="rcpt-ph"><Icon name="image" /></span>}
                         {r.status === "scanning" && <span className="rcpt-reading"><span className="imp-spin"><Icon name="loader" /></span>Reading{"…"}</span>}
                       </div>
-                      {r.status === "ready" ?
+                      {r.status === "failed" ?
+                        <div className="rcpt-fields">
+                          <span className="imp-mode-hint" style={{ display: "block", marginBottom: 8, color: "var(--red)" }}>{r.note}</span>
+                          <div className="rcpt-field-row">
+                            <button className="imp-textbtn" onClick={() => setRcpts((p) => p.map((x) => x.id === r.id ? { ...x, status: "ready", name: "", amt: "", date: x.date || txIsoDaysAgo(0), cat: "Shopping", icon: "bag", note: "" } : x))}>Enter details manually</button>
+                            <button className="imp-textbtn" onClick={() => setRcpts((p) => p.filter((x) => x.id !== r.id))}>Remove</button>
+                          </div>
+                        </div>
+                        : r.status === "ready" ?
                         <div className="rcpt-fields">
                           {r.note && <span className="imp-mode-hint" style={{ display: "block", marginBottom: 4 }}>{r.note}</span>}
                           {rDup && <span className="imp-mode-hint" style={{ ...TX_DUP_STYLE, display: "block", marginBottom: 4 }}>{"⚠"} You may already have this (same day &amp; amount).</span>}

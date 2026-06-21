@@ -1107,7 +1107,7 @@ function Sankey({ income, out, monthLabel }) {
    CASH FLOW TREND — 12-month grouped bars + net-saved line
    ============================================================ */
 function CashFlowTrend({ data }) {
-  const W = 940, H = 240, padL = 46, padR = 14, padT = 18, padB = 30;
+  const W = 940, H = 240, padL = 46, padR = 48, padT = 18, padB = 30;
   const [hov, setHov] = useState(null);
   const max = Math.max(...data.flatMap((d) => [d.in, d.out]));
   const niceMax = Math.ceil(max / 1000) * 1000;
@@ -1118,7 +1118,14 @@ function CashFlowTrend({ data }) {
   const kf = (v) => "$" + (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k";
   const ticks = [0, niceMax / 2, niceMax];
 
-  const netPts = data.map((d, i) => [padL + i * groupW + groupW / 2, yOf(d.in - d.out)]);
+  // Net-saved line gets its OWN symmetric Y axis so negative months stay in-box.
+  const nets = data.map((d) => d.in - d.out);
+  const netExtent = Math.max(...nets.map(Math.abs));
+  const netNice = Math.max(1000, Math.ceil(netExtent / 1000) * 1000);
+  const yNet = (v) => padT + innerH / 2 - v / netNice * (innerH / 2 - 6);
+  const netKf = (v) => v === 0 ? "0" : (v > 0 ? "+" : MINUS) + "$" + (Math.abs(v) / 1000).toFixed(Math.abs(v) % 1000 === 0 ? 0 : 1) + "k";
+
+  const netPts = data.map((d, i) => [padL + i * groupW + groupW / 2, yNet(d.in - d.out)]);
   const netPath = netPts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
 
   return (
@@ -1130,6 +1137,11 @@ function CashFlowTrend({ data }) {
             <line x1={padL} y1={yOf(t)} x2={W - padR} y2={yOf(t)} stroke="var(--border)" strokeWidth="1" strokeDasharray="2 5" />
             <text x={padL - 10} y={yOf(t) + 4} textAnchor="end" fontSize="11" fill="var(--muted)" style={{ fontVariantNumeric: "tabular-nums" }}>{kf(t)}</text>
           </g>
+        )}
+        {/* Net-axis zero baseline + right-side secondary axis */}
+        <line x1={padL} y1={yNet(0)} x2={W - padR} y2={yNet(0)} stroke="var(--green)" strokeOpacity="0.35" strokeWidth="1" strokeDasharray="4 4" />
+        {[netNice, 0, -netNice].map((t, i) =>
+        <text key={"net" + i} x={W - padR + 8} y={yNet(t) + 4} textAnchor="start" fontSize="11" fill="var(--green)" style={{ fontVariantNumeric: "tabular-nums" }}>{netKf(t)}</text>
         )}
         {data.map((d, i) => {
           const cx = padL + i * groupW + groupW / 2;
@@ -2214,7 +2226,7 @@ function App() {
             <polyline points="94,134 120,117 139,127 170,105" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
             <polyline points="156,105 170,105 170,121" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="side-brandname">Budget</span>
+          <span className="side-brandname">Budge<span className="wd-accent">t</span></span>
         </span>
       </header>
 
@@ -2227,7 +2239,7 @@ function App() {
             <polyline points="94,134 120,117 139,127 170,105" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
             <polyline points="156,105 170,105 170,121" fill="none" stroke="var(--mark-line)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="side-brandname">Budget</span>
+          <span className="side-brandname">Budge<span className="wd-accent">t</span></span>
           <button className="drawer-close" onClick={() => setNavOpen(false)} aria-label="Close navigation">{"\u00D7"}</button>
         </div>
         <nav className="side-nav">
