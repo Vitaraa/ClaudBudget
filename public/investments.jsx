@@ -761,7 +761,7 @@ function InvestmentModal({ modal, onClose, onSave, onDelete }) {
   const firstInvestmentAccountId = invAccts.length ? invAccts[0].id : "";
 
   const [cls, setCls] = ivUseState(src ? src.cls : "CAD stocks");
-  const [accountId, setAccountId] = ivUseState(src ? (src.account_id || "") : (firstInvestmentAccountId || ""));
+  const [accountId, setAccountId] = ivUseState(src ? (src.account_id || "") : ((modal && modal.accountId) || firstInvestmentAccountId || ""));
   const [ticker, setTicker] = ivUseState(src ? src.ticker : "");
   const [name, setName] = ivUseState(src ? src.name : "");
   const [kind, setKind] = ivUseState(src ? src.kind : "stock");

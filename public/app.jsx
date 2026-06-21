@@ -2324,6 +2324,12 @@ function App() {
   const acctList = [...ACCOUNT_GROUPS.flatMap((g) => g.accounts), ...addedAccts]
     .filter((a) => !deletedAccts.includes(a.name));
   const acctNames = acctList.map((a) => a.name);
+  // Investment accounts (TFSA/401(k)/Brokerage…) hold securities, not ordinary
+  // cash transactions — exclude them from the Add-transaction and Import pickers.
+  // Stocks are bought/sold from the Investments tab or the account's own page.
+  const isInvAcct = (a) => !!(window.ClaudStore && ClaudStore.isInvestmentAccount && ClaudStore.isInvestmentAccount(a));
+  const cashAcctList = acctList.filter((a) => !isInvAcct(a));
+  const cashAcctNames = cashAcctList.map((a) => a.name);
 
   // leaving the Accounts tab closes any open account
   useEffect(() => { if (tab !== "Accounts") setAcctOpen(null); if (tab !== "Investments") setHoldingOpen(null); }, [tab]);
@@ -2538,6 +2544,8 @@ function App() {
                   {notifOpen && <InsightsFeed onClose={() => setNotifOpen(false)} onOpenReview={() => setReviewOpen(true)} placement={t.insightsPlacement} />}
                 </div>}
               {!openAcct && !openHolding && PAGE_ACTION[tab] && Button && <Button variant="primary" size="sm" onClick={() => { if (tab === "Accounts") setAddOpen(true); else if (tab === "Transactions") setAddTxnOpen(true); else if (tab === "Budget") window.dispatchEvent(new CustomEvent("claud:add-budget")); else if (tab === "Goals") window.dispatchEvent(new CustomEvent("claud:add-goal")); else if (tab === "Investments") setInvModal({ mode: "add" }); }}>+ {PAGE_ACTION[tab]}</Button>}
+              {/* On an investment account's own page, buy/track a position here (pre-targeted to this account); selling/editing lives in the Investments tab. */}
+              {openAcct && !openHolding && Button && isInvAcct(openAcct) && <Button variant="primary" size="sm" onClick={() => setInvModal({ mode: "add", accountId: openAcct.id })}>+ Add investment</Button>}
             </div>
           </header>
 
@@ -2757,10 +2765,10 @@ function App() {
       {addOpen && <AddAccountModal onClose={() => setAddOpen(false)} onAdd={(a) => { ClaudActions.addAccount(a); setAddOpen(false); }} />}
 
       {/* ---- Add transaction ---- */}
-      {addTxnOpen && <AddTransactionModal accounts={acctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} />}
+      {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} />}
 
       {/* ---- Import statements / receipts ---- */}
-      {importOpen && <ImportModal accounts={acctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => { ClaudActions.importTxns(items); setImportOpen(null); }} />}
+      {importOpen && <ImportModal accounts={cashAcctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => { ClaudActions.importTxns(items); setImportOpen(null); }} />}
 
       {/* ---- Add / edit investment ---- */}
       {invModal && <InvestmentModal modal={invModal} onClose={() => setInvModal(null)} onSave={saveHolding} onDelete={(id) => { setInvModal(null); setInvDelete(holdings.find((x) => x.id === id) || null); }} />}
