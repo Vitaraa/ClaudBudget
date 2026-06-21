@@ -48,6 +48,40 @@ const acGen = (end, growth, vol, seed) => {
   return out;
 };
 
+/* Real monthly closing-balance series for one account. Mirrors the dashboard's
+   net-worth method (server compute.netWorthSeries): bucket the account's actual
+   transactions by month, then walk backwards from the current balance so the
+   last point equals today's balance and every earlier point is consistent with
+   recorded activity. Accounts with no transactions render as a flat line at the
+   current balance — real, not random. */
+const AC_MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function acMonthlyBalanceSeries(txns, currentBal, n = 24) {
+  const now = new Date();
+  const buckets = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      key: d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"),
+      label: AC_MON3[d.getMonth()] + " '" + String(d.getFullYear()).slice(2),
+      flow: 0
+    });
+  }
+  const idx = {};
+  buckets.forEach((b, i) => { idx[b.key] = i; });
+  (txns || []).forEach((t) => {
+    const mk = String(t.date || t.day || "").slice(0, 7);
+    const amt = t.amt != null ? t.amt : t.amount;
+    if (idx[mk] != null && typeof amt === "number") buckets[idx[mk]].flow += amt;
+  });
+  const vals = new Array(n);
+  let v = Number(currentBal) || 0;
+  for (let i = n - 1; i >= 0; i--) {
+    vals[i] = Math.round(v * 100) / 100;
+    v = Math.round((v - buckets[i].flow) * 100) / 100;   // balance at the end of the previous month
+  }
+  return buckets.map((b, i) => ({ label: b.label, value: vals[i] }));
+}
+
 /* ============================================================
    Per-account extended data, keyed by account name.
    history: 24 monthly closing balances. txns: recent activity.
@@ -276,36 +310,43 @@ function AccountDetailPage({ acct, onDelete }) {
   const data = (window.useClaudData ? window.useClaudData() : window.ClaudData) || {};
   const [period, setPeriod] = acUseState("1Y");
   const [confirm, setConfirm] = acUseState(false);
+  const [edit, setEdit] = acUseState(false);
+  const [openTxnId, setOpenTxnId] = acUseState(null);
+  const [viewRcpt, setViewRcpt] = acUseState(null);
 
-  const extra = ACCT_EXTRA[acct.name] || { kind: "checking", history: acct.trend || [acct.bal], txns: [], meta: [], stat: null };
-  const isCredit = extra.kind === "credit";
-
-  const n = AC_PERIODS[period];
-  const hist = extra.history.slice(-n);
-  const labels = AC_LABELS.slice(-n);
-
-  // change over the visible window
-  const winChg = hist[hist.length - 1] - hist[0];
-  const winPct = hist[0] !== 0 ? winChg / Math.abs(hist[0]) * 100 : 0;
-  const monthPct = (acct.bal - acct.chg) !== 0 ? acct.chg / Math.abs(acct.bal - acct.chg) * 100 : 0;
+  const extra = ACCT_EXTRA[acct.name] || { kind: "checking", txns: [], meta: [], stat: null };
+  const isCredit = extra.kind === "credit" || acct.group === "Credit" || acct.group_label === "Credit";
 
   // categories offered when recategorizing here = built-in ∪ budgets ∪ account-specific (Transfer / Investment)
   const acCats = () => ({ ...((window.getCatColors && window.getCatColors()) || {}), ...AC_CAT_COLORS });
 
   // This account's REAL activity, read live from the server store and matched by
-  // account id (or name as a fallback). Server txns already expose name/cat/amt/day/icon.
-  // Recategorize / change icon / remove persist through ClaudActions, then the store
-  // refresh re-renders this list (no local override state needed).
+  // account id (or name as a fallback). Full transaction objects are kept so the
+  // shared TxnDetailDrawer (notes / tags / split / attachment) and the balance
+  // chart can use them; recat / icon / remove persist through ClaudActions, then
+  // the store refresh re-renders this list (no local override state needed).
   const txns = (data.transactions || [])
     .filter((t) => (acct.id != null && t.account_id === acct.id) || (t.account_name && t.account_name === acct.name) || (t.account && t.account === acct.name))
     .map((t) => ({
-      id: t.id,
-      name: t.name,
+      ...t,
       cat: t.cat != null ? t.cat : t.category,
       amt: t.amt != null ? t.amt : t.amount,
       day: t.day || t.date,
-      icon: t.icon
+      account: t.account || t.account_name || acct.name
     }));
+
+  // Real monthly closing-balance series, back-derived from the current balance and
+  // this account's transaction flow — replaces the old placeholder series.
+  const n = AC_PERIODS[period];
+  const fullSeries = acMonthlyBalanceSeries(txns, acct.bal, 24);
+  const sliced = fullSeries.slice(-n);
+  const hist = sliced.map((s) => s.value);
+  const labels = sliced.map((s) => s.label);
+
+  // change over the visible window
+  const winChg = hist[hist.length - 1] - hist[0];
+  const winPct = hist[0] !== 0 ? winChg / Math.abs(hist[0]) * 100 : 0;
+  const monthPct = (acct.bal - acct.chg) !== 0 ? acct.chg / Math.abs(acct.bal - acct.chg) * 100 : 0;
 
   // transactions grouped by day, preserving order
   const days = [];
@@ -380,12 +421,21 @@ function AccountDetailPage({ acct, onDelete }) {
                   <React.Fragment key={d.day}>
                     <div className="txn-day"><span>{d.day}</span><span className="day-tot" style={{ color: dayTot >= 0 ? "var(--green)" : "var(--muted)" }}>{acSigned(dayTot, 0)}</span></div>
                     {d.items.map((x) =>
-                      <div className="trow" key={x.id}>
-                        <IconPicker value={x.icon} onPick={(n) => window.ClaudActions && window.ClaudActions.setTxnIcon(x.id, n)} />
+                      <div className={"trow" + (x.review ? " flagged" : "")} key={x.id}>
+                        <IconPicker value={x.icon} onPick={(ic) => window.ClaudActions && window.ClaudActions.setTxnIcon(x.id, ic)} />
                         <div className="trow-main">
-                          <span className="trow-name">{x.name}</span>
+                          <button className="trow-name linkish" onClick={() => setOpenTxnId(x.id)} title="Open details">
+                            {x.review && <span className="trow-flag" title={x.reason || "Needs review"}><Icon name="alert" /></span>}
+                            {x.name}
+                          </button>
                           <div className="trow-tags">
                             <CatPicker value={x.cat} categories={acCats()} onPick={(c) => window.ClaudActions && window.ClaudActions.recatTxn(x.id, c)} />
+                            {((x.note && x.note.trim()) || (x.tags && x.tags.length > 0) || x.attachment) &&
+                              <span className="trow-marks">
+                                {x.note && x.note.trim() && <span className="mk" title="Has a note"><Icon name="note" /></span>}
+                                {x.tags && x.tags.length > 0 && <span className="mk" title={x.tags.join(", ")}><Icon name="tag" />{x.tags.length}</span>}
+                                {x.attachment && <span className="mk" title="Has attachment"><Icon name="paperclip" /></span>}
+                              </span>}
                           </div>
                         </div>
                         <span className={"trow-amt " + (x.amt >= 0 ? "pos" : "")}>{acSigned(x.amt)}</span>
@@ -399,7 +449,13 @@ function AccountDetailPage({ acct, onDelete }) {
         </Card>
 
         <Card widget className="span2">
-          <div className="widget-head"><span className="widget-title">Account details</span></div>
+          <div className="widget-head">
+            <span className="widget-title">Account details</span>
+            <button type="button" className="acct-edit-btn" onClick={() => setEdit(true)} title="Edit account"
+              style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, background: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 10px", color: "var(--text)", cursor: "pointer", font: "inherit", fontSize: 13 }}>
+              <Icon name="pencil" style={{ width: 14, height: 14 }} /> Edit
+            </button>
+          </div>
           <div className="ainfo-list">
             <div className="ainfo-row"><span className="ainfo-k">Institution</span><span className="ainfo-v">{acct.inst}</span></div>
             <div className="ainfo-row"><span className="ainfo-k">Account number</span><span className="ainfo-v">{"\u00B7\u00B7\u00B7\u00B7"} {acct.mask}</span></div>
@@ -421,6 +477,41 @@ function AccountDetailPage({ acct, onDelete }) {
       </div>
 
       {confirm && <AcctDeleteModal acct={acct} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); onDelete(); }} />}
+
+      {edit && <EditAccountModal acct={acct} onClose={() => setEdit(false)} />}
+
+      {/* same side detail panel as the Transactions tab */}
+      {openTxnId && (() => {
+        const Drawer = window.TxnDetailDrawer;
+        const t = txns.find((x) => x.id === openTxnId);
+        if (!Drawer || !t) return null;
+        const rules = data.rules || [];
+        const hasRule = !!(t.name && rules.some((r) => r.match && t.name.toLowerCase().includes(String(r.match).toLowerCase())));
+        const A = window.ClaudActions || {};
+        return <Drawer
+          txn={{ ...t, needsReview: !!t.review }}
+          hasRule={hasRule}
+          onClose={() => setOpenTxnId(null)}
+          onRecat={(id, c) => A.recatTxn && A.recatTxn(id, c)}
+          onRemove={(id) => { A.removeTxn && A.removeTxn(id); setOpenTxnId(null); }}
+          onSetIcon={(id, ic) => A.setTxnIcon && A.setTxnIcon(id, ic)}
+          onViewReceipt={(x) => setViewRcpt(x)} />;
+      })()}
+
+      {viewRcpt &&
+        <div className="rcpt-overlay" onClick={() => setViewRcpt(null)}>
+          <div className="rcpt-light" onClick={(e) => e.stopPropagation()}>
+            <div className="rcpt-light-head">
+              <div className="rcpt-light-id">
+                <span className="rcpt-light-name">{viewRcpt.name}</span>
+                <span className="rcpt-light-sub">{viewRcpt.day} {"·"} {viewRcpt.account}</span>
+              </div>
+              <span className="rcpt-light-amt">{acSigned(viewRcpt.amt)}</span>
+              <button className="fs-modal-close" onClick={() => setViewRcpt(null)} aria-label="Close">{"×"}</button>
+            </div>
+            <div className="rcpt-light-body"><img src={viewRcpt.receipt || viewRcpt.attachment} alt={"Receipt for " + viewRcpt.name} /></div>
+          </div>
+        </div>}
     </React.Fragment>);
 }
 
@@ -555,3 +646,119 @@ function AddAccountModal({ onClose, onAdd }) {
 }
 
 Object.assign(window, { AddAccountModal });
+
+/* ============================================================
+   EDIT ACCOUNT — correct a name/typo, institution, type, account
+   number, balance, or savings rate. Reuses the .fs-* modal vocabulary
+   (shared with Add account). Persists via ClaudActions.updateAccount;
+   the store refresh re-renders every view. Icons are edited inline
+   (IconPicker), so they're intentionally not part of this dialog.
+   ============================================================ */
+function EditAccountModal({ acct, onClose }) {
+  const { Button } = AC;
+  const typeFromGroup = (acct.group === "Credit" || acct.group_label === "Credit") ? "Credit card"
+    : (acct.group === "Investments" || acct.group_label === "Investments") ? "Investment"
+    : "Chequing";
+  const initialType = (acct.type && AC_ADD_TYPES[acct.type]) ? acct.type : typeFromGroup;
+  const initialIsCredit = !!(AC_ADD_TYPES[initialType] && AC_ADD_TYPES[initialType].kind === "credit");
+
+  const [inst, setInst] = acUseState(acct.inst || acct.institution || CA_BANKS[0]);
+  const [type, setType] = acUseState(initialType);
+  const [name, setName] = acUseState(acct.name || "");
+  const [bal, setBal] = acUseState(String(initialIsCredit ? Math.abs(acct.bal || 0) : (acct.bal || 0)));
+  const [mask, setMask] = acUseState(acct.mask || "");
+  const [apy, setApy] = acUseState(String(acct.apy || "4.00").replace(/[^0-9.]/g, "") || "4.00");
+  const [touched, setTouched] = acUseState(false);
+  const [saving, setSaving] = acUseState(false);
+
+  React.useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const cfg = AC_ADD_TYPES[type] || AC_ADD_TYPES["Chequing"];
+  const isSavings = type === "Savings";
+  const isCredit = type === "Credit card";
+  const balNum = parseFloat(String(bal).replace(/[^0-9.\-]/g, ""));
+  const validName = name.trim().length > 0;
+  const validBal = bal !== "" && !Number.isNaN(balNum);
+  const valid = validName && validBal;
+
+  function save() {
+    setTouched(true);
+    if (!valid || saving) return;
+    const signedBal = isCredit ? -Math.abs(balNum) : balNum;
+    const m = String(mask).replace(/\D/g, "").slice(-4);
+    const patch = {
+      name: name.trim(),
+      institution: inst,
+      type: type,
+      group_label: cfg.group,
+      mask: m,
+      balance: signedBal,
+      apy: isSavings ? apy + "% APY" : ""
+    };
+    setSaving(true);
+    Promise.resolve(window.ClaudActions && window.ClaudActions.updateAccount(acct.id, patch))
+      .then(() => onClose())
+      .catch(() => setSaving(false));
+  }
+
+  return (
+    <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fs-modal" role="dialog" aria-modal="true" aria-label="Edit account">
+        <div className="fs-modal-head">
+          <span className="fs-modal-title"><span className="fs-ico"><Icon name={acct.icon || cfg.icon} /></span>Edit account</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+
+        <div className="fs-grid">
+          <label className="fs-field">
+            <span>Institution</span>
+            <select value={inst} onChange={(e) => setInst(e.target.value)}>
+              {(CA_BANKS.includes(inst) ? CA_BANKS : [inst, ...CA_BANKS]).map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </label>
+          <label className="fs-field">
+            <span>Account type</span>
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              {Object.keys(AC_ADD_TYPES).map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+
+          <label className="fs-field full">
+            <span>Account name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={cfg.ph}
+              style={touched && !validName ? { borderColor: "var(--red)" } : undefined} />
+          </label>
+
+          <label className="fs-field">
+            <span>{isCredit ? "Amount owed (CAD)" : "Current balance (CAD)"}</span>
+            <input type="number" inputMode="decimal" step="0.01" value={bal} onChange={(e) => setBal(e.target.value)} placeholder="0.00"
+              style={touched && !validBal ? { borderColor: "var(--red)" } : undefined} />
+          </label>
+          <label className="fs-field">
+            <span>Account number (last 4)</span>
+            <input value={mask} onChange={(e) => setMask(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="optional" />
+          </label>
+
+          {isSavings &&
+            <label className="fs-field full">
+              <span>Interest rate (% APY)</span>
+              <input type="number" inputMode="decimal" step="0.01" value={apy} onChange={(e) => setApy(e.target.value)} placeholder="4.00" />
+            </label>
+          }
+        </div>
+
+        <div className="fs-modal-foot">
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={save}>{saving ? "Saving…" : "Save changes"}</Button>}
+          </div>
+        </div>
+      </div>
+    </div>);
+}
+
+Object.assign(window, { EditAccountModal });

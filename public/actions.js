@@ -49,6 +49,7 @@
     // accounts
     addAccount: function (a) { return API.post('/api/accounts', mapAccount(a)).then(done).catch(fail); },
     updateAccount: function (id, patch) { return API.put('/api/accounts/' + id, patch).then(done).catch(fail); },
+    reorderAccounts: function (ids) { return API.post('/api/accounts/reorder', { order: ids }).then(done).catch(fail); },
     deleteAccount: function (id) { return API.del('/api/accounts/' + id).then(done).catch(fail); },
     setAccountIcon: function (name, icon) {
       var a = Store.get().accounts.find(function (x) { return x.name === name; });

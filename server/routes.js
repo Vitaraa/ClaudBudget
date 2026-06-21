@@ -52,6 +52,19 @@ function findAccountByName(uid, name) {
   return rows.find((a) => a.name === name) || null;
 }
 
+/* Running-balance ledger: every transaction is a real money movement, so the
+   owning account's balance moves with it. balance is encrypted at rest, so we
+   can't do `SET balance = balance + ?` in SQL — read the decrypted value, add
+   the delta, write it back (same pattern as the goals-funding route). No-ops on
+   a null account (an unassigned transaction) or a zero delta. */
+function adjustAccountBalance(uid, acctId, delta) {
+  if (!acctId || !delta) return;
+  const a = db.prepare('SELECT balance FROM accounts WHERE id = ? AND user_id = ?').get(acctId, uid);
+  if (!a) return;
+  db.prepare('UPDATE accounts SET balance = ? WHERE id = ? AND user_id = ?')
+    .run(round2((a.balance || 0) + delta), acctId, uid);
+}
+
 /* --------------------------------------------------------- row mappers */
 function txnRow(r) {
   if (!r) return r;
@@ -360,10 +373,11 @@ function register(router) {
   }));
   router.put('/api/accounts/:id', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id; const row = ownedRow('accounts', ctx.params.id, uid); const b = ctx.body;
+    const newName = b.name != null ? str(b.name, 'Name', { required: true }) : row.name;
     db.prepare(`UPDATE accounts SET group_label=?,type=?,name=?,institution=?,mask=?,balance=?,icon=?,apy=?,sort=? WHERE id=? AND user_id=?`).run(
       b.group_label != null ? str(b.group_label, 'group') : row.group_label,
       b.type != null ? str(b.type, 'type') : row.type,
-      b.name != null ? str(b.name, 'Name', { required: true }) : row.name,
+      newName,
       b.institution != null ? str(b.institution, 'institution') : row.institution,
       b.mask != null ? str(b.mask, 'mask') : row.mask,
       b.balance != null ? num(b.balance, 'balance') : row.balance,
@@ -371,7 +385,24 @@ function register(router) {
       b.apy != null ? str(b.apy, 'apy') : row.apy,
       b.sort != null ? num(b.sort, 'sort') : row.sort,
       row.id, uid);
+    // a rename should follow the account onto its transactions (they store
+    // account_name too, used for display and name-based matching elsewhere)
+    if (newName !== row.name) {
+      db.prepare('UPDATE transactions SET account_name=? WHERE account_id=? AND user_id=?').run(newName, row.id, uid);
+    }
     ctx.json(200, { account: ownedRow('accounts', row.id, uid) });
+  }));
+  // Persist a new account order (drag-to-reorder). sort is a plaintext column,
+  // so a straight positional UPDATE is fine; ids not owned by the user are skipped.
+  router.post('/api/accounts/reorder', auth.requireAuth(async (req, res, ctx) => {
+    const uid = ctx.user.id;
+    const order = Array.isArray(ctx.body.order) ? ctx.body.order : [];
+    tx(() => {
+      order.forEach((id, i) => {
+        db.prepare('UPDATE accounts SET sort=? WHERE id=? AND user_id=?').run(i, String(id), uid);
+      });
+    });
+    ctx.json(200, { ok: true, accounts: db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY sort, created_at').all(uid) });
   }));
   router.delete('/api/accounts/:id', auth.requireAuth(async (req, res, ctx) => {
     ownedRow('accounts', ctx.params.id, ctx.user.id);
@@ -398,6 +429,7 @@ function register(router) {
       id, uid, acctId, acctName, name, cat, amount,
       str(b.date || b.day, 'date') || today(), str(b.icon, 'icon'),
       bool(b.review), str(b.reason, 'reason'), bool(b.excluded), nowISO());
+    adjustAccountBalance(uid, acctId, amount);   // running balance follows the new transaction
     ctx.json(200, { transaction: txnRow(ownedRow('transactions', id, uid)) });
   }));
   router.put('/api/transactions/:id', auth.requireAuth(async (req, res, ctx) => {
@@ -410,11 +442,12 @@ function register(router) {
     let acctId = row.account_id, acctName = row.account_name;
     if (b.account_id !== undefined) { acctId = str(b.account_id, 'account_id'); const a = acctId && db.prepare('SELECT name FROM accounts WHERE id=? AND user_id=?').get(acctId, uid); acctName = a ? a.name : acctName; }
     else if (b.account !== undefined || b.account_name !== undefined) { acctName = str(b.account || b.account_name, 'account'); const a = acctName && findAccountByName(uid, acctName); acctId = a ? a.id : null; }
+    const newAmount = (b.amt != null || b.amount != null) ? num(b.amt != null ? b.amt : b.amount, 'amount') : row.amount;
     db.prepare(`UPDATE transactions SET account_id=?,account_name=?,name=?,category=?,amount=?,date=?,icon=?,review=?,reason=?,excluded=?,note=?,tags=?,splits=?,attachment=?,history=? WHERE id=? AND user_id=?`).run(
       acctId, acctName,
       b.name != null ? str(b.name, 'Name', { required: true }) : row.name,
       newCat,
-      (b.amt != null || b.amount != null) ? num(b.amt != null ? b.amt : b.amount, 'amount') : row.amount,
+      newAmount,
       (b.date != null || b.day != null) ? str(b.date || b.day, 'date') : row.date,
       b.icon != null ? str(b.icon, 'icon') : row.icon,
       b.review != null ? bool(b.review) : row.review,
@@ -426,11 +459,19 @@ function register(router) {
       b.attachment !== undefined ? (b.attachment ? String(b.attachment) : null) : row.attachment,
       JSON.stringify(history),
       row.id, uid);
+    // keep the running balance(s) in sync with the amount / account change
+    if (row.account_id === acctId) {
+      adjustAccountBalance(uid, acctId, round2(newAmount - row.amount));
+    } else {
+      adjustAccountBalance(uid, row.account_id, -row.amount);   // back out of the old account
+      adjustAccountBalance(uid, acctId, newAmount);             // apply to the new one
+    }
     ctx.json(200, { transaction: txnRow(ownedRow('transactions', row.id, uid)) });
   }));
   router.delete('/api/transactions/:id', auth.requireAuth(async (req, res, ctx) => {
-    ownedRow('transactions', ctx.params.id, ctx.user.id);
+    const row = ownedRow('transactions', ctx.params.id, ctx.user.id);
     db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(ctx.params.id, ctx.user.id);
+    adjustAccountBalance(ctx.user.id, row.account_id, -row.amount);   // removing the txn reverses its effect
     ctx.json(200, { ok: true });
   }));
   router.post('/api/transactions/bulk', auth.requireAuth(async (req, res, ctx) => {
@@ -438,13 +479,13 @@ function register(router) {
     const action = str(ctx.body.action, 'action', { required: true });
     tx(() => {
       for (const id of ids) {
-        const r = db.prepare('SELECT id FROM transactions WHERE id=? AND user_id=?').get(id, uid);
+        const r = db.prepare('SELECT id, account_id, amount FROM transactions WHERE id=? AND user_id=?').get(id, uid);
         if (!r) continue;
         if (action === 'recat') db.prepare('UPDATE transactions SET category=?, review=0 WHERE id=? AND user_id=?').run(str(ctx.body.category, 'category'), id, uid);
         else if (action === 'review') db.prepare('UPDATE transactions SET review=0 WHERE id=? AND user_id=?').run(id, uid);
         else if (action === 'exclude') db.prepare('UPDATE transactions SET excluded=1 WHERE id=? AND user_id=?').run(id, uid);
         else if (action === 'include') db.prepare('UPDATE transactions SET excluded=0 WHERE id=? AND user_id=?').run(id, uid);
-        else if (action === 'delete') db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(id, uid);
+        else if (action === 'delete') { db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(id, uid); adjustAccountBalance(uid, r.account_id, -r.amount); }
       }
     });
     ctx.json(200, { ok: true, count: ids.length });
@@ -452,6 +493,7 @@ function register(router) {
   router.post('/api/transactions/import', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id; const items = Array.isArray(ctx.body.items) ? ctx.body.items : [];
     const created = [];
+    const balDeltas = {};   // acctId -> net amount imported, applied to balances after the loop
     tx(() => {
       for (const b of items) {
         const id = newId('tx_');
@@ -460,14 +502,16 @@ function register(router) {
         if (acctName) { const a = findAccountByName(uid, acctName); if (a) acctId = a.id; }
         const name = str(b.name, 'Name', { required: true });
         let cat = str(b.cat || b.category, 'category') || applyRules(uid, name);
+        const amount = num(b.amt != null ? b.amt : b.amount, 'amount', { required: true });
         db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,created_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-          id, uid, acctId, acctName, name, cat,
-          num(b.amt != null ? b.amt : b.amount, 'amount', { required: true }),
+          id, uid, acctId, acctName, name, cat, amount,
           str(b.date || b.day, 'date') || today(), str(b.icon, 'icon'),
           bool(b.review != null ? b.review : true), str(b.reason, 'reason') || 'Imported — confirm the category', 0, nowISO());
+        if (acctId) balDeltas[acctId] = (balDeltas[acctId] || 0) + amount;   // imported money moves the balance
         created.push(id);
       }
+      for (const aid in balDeltas) adjustAccountBalance(uid, aid, balDeltas[aid]);
     });
     ctx.json(200, { ok: true, count: created.length, transactions: created.map((id) => txnRow(db.prepare('SELECT * FROM transactions WHERE id=?').get(id))) });
   }));

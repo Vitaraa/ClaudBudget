@@ -382,6 +382,33 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
 
   const openRow = (name) => onOpen && onOpen(name);
 
+  // drag-to-reorder (within a group). Only the grip starts a drag; rows are the
+  // drop targets. We persist one global order (group order preserved) via the
+  // accounts.sort column through ClaudActions.reorderAccounts.
+  const [drag, setDrag] = useState(null);       // { group, id, name }
+  const [overName, setOverName] = useState(null);
+  const groupAccts = (label) =>
+    [...(((ACCOUNT_GROUPS.find((g) => g.label === label) || {}).accounts) || []), ...added.filter((a) => a.group === label)]
+      .filter((a) => !deleted.includes(a.name));
+  function commitReorder(groupLabel, targetName) {
+    const d = drag;
+    setDrag(null); setOverName(null);
+    if (!d || d.group !== groupLabel || d.name === targetName) return;
+    const order = [];
+    ACCOUNT_GROUPS.forEach((g) => {
+      let list = groupAccts(g.label);
+      if (g.label === groupLabel) {
+        const moved = list.find((a) => a.name === d.name);
+        list = list.filter((a) => a.name !== d.name);
+        let ti = targetName == null ? list.length : list.findIndex((a) => a.name === targetName);
+        if (ti < 0) ti = list.length;
+        if (moved) list.splice(ti, 0, moved);
+      }
+      list.forEach((a) => { if (a.id != null) order.push(a.id); });
+    });
+    if (order.length && window.ClaudActions) window.ClaudActions.reorderAccounts(order);
+  }
+
   const empty = flat.length === 0;
   const creditCount = flat.filter((a) => a.bal < 0).length;
 
@@ -424,11 +451,23 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
               <span className="widget-title">{g.label}</span>
               <span className="group-sub muted">{accts.length} account{accts.length === 1 ? "" : "s"} <b style={{ color: sub < 0 ? "var(--red)" : "var(--text)" }}>{money(sub, 2)}</b></span>
             </div>
-            <div className="acct-rows">
+            <div className="acct-rows"
+              onDragOver={(e) => { if (drag && drag.group === g.label) e.preventDefault(); }}
+              onDrop={(e) => { e.preventDefault(); commitReorder(g.label, null); }}>
               {accts.map((a) =>
               <div className="acct-row clickable" key={a.name} role="button" tabIndex={0}
                 onClick={() => openRow(a.name)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(a.name); } }}>
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(a.name); } }}
+                onDragOver={(e) => { if (drag && drag.group === g.label && drag.name !== a.name) { e.preventDefault(); setOverName(a.name); } }}
+                onDragLeave={() => setOverName((cur) => (cur === a.name ? null : cur))}
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitReorder(g.label, a.name); }}
+                style={overName === a.name ? { boxShadow: "inset 0 2px 0 0 var(--accent)" } : undefined}>
+                  <span className="acct-grip" title="Drag to reorder" aria-label="Drag to reorder"
+                    draggable={a.id != null}
+                    onClick={(e) => e.stopPropagation()}
+                    onDragStart={(e) => { setDrag({ group: g.label, id: a.id, name: a.name }); try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", a.name); } catch (_) {} }}
+                    onDragEnd={() => { setDrag(null); setOverName(null); }}
+                    style={{ cursor: "grab", color: "var(--muted)", fontSize: 15, lineHeight: 1, userSelect: "none", flexShrink: 0 }}>{"\u283F"}</span>
                   <IconPicker className="acct-ico" value={iconOv[a.name] || a.icon} onPick={(n) => onSetIcon && onSetIcon(a.name, n)} />
                   <div className="acct-row-body">
                     <span className="acct-row-name">{a.name}{a.apy && <span className="apy-tag">{a.apy}</span>}</span>
