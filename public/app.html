@@ -212,6 +212,19 @@
   .feat-more { font-size: var(--text-xs); color: var(--muted); font-weight: 600; }
   .up-foot-note { padding: 0 24px 20px; font-size: var(--text-2xs); color: var(--muted); text-align: center; }
 
+  /* in-progress + error states on the Pro button */
+  .up-err { display: flex; align-items: center; gap: 7px; font-size: var(--text-xs); color: var(--red); line-height: 1.4; margin-top: -2px; }
+  .up-err svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+  /* upgrade confirmation ("You're on Pro") screen */
+  .up-success { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 32px 28px 26px; }
+  .up-success-badge { width: 56px; height: 56px; border-radius: var(--radius-pill); background: var(--accent); color: var(--accent-contrast); display: flex; align-items: center; justify-content: center; }
+  .up-success-badge svg { width: 30px; height: 30px; }
+  .up-success h2 { margin: 4px 0 0; font-size: 1.4rem; font-weight: 700; letter-spacing: var(--tracking-tight); }
+  .up-success p { margin: 0; font-size: var(--text-sm); color: var(--muted); line-height: 1.5; max-width: 40ch; text-wrap: pretty; }
+  .up-success-feats { width: 100%; text-align: left; margin-top: 6px; border-top: 1px solid var(--accent-line); }
+  .up-success .btn { width: 100%; justify-content: center; margin-top: 6px; }
+
   @media (max-width: 560px) {
     .up-cards-grid { grid-template-columns: 1fr; }
   }

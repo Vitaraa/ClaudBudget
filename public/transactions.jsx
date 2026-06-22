@@ -327,7 +327,65 @@ function txTitleCaseWord(w) {
   if (TX_KEEP_UPPER.has(w.toUpperCase())) return w.toUpperCase();
   return w.replace(/[A-Za-z][A-Za-z'’]*/g, (m) => m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
 }
+/* ---- bank transaction-type normaliser --------------------------------------
+   Chequing/savings statements lead each entry with a transaction TYPE, often a
+   reference number, and (on the next printed line) a counterparty:
+       ATM DEPOSIT            / Alderbridge Garden City 2B2E
+       E-TRANSFER 011574003512 / ERIC TUNG QUANG DIEP
+       PAY 10742396544         / CANADA COMPUTERS INC
+       RETAIL PURCHASE 6130…   / LA PATISSERIE
+   For "self-naming" types (ATM, fees, card transfers) the TYPE *is* the name and
+   the trailing text is just a machine/location/ref → drop it. For "counterparty"
+   types (e-transfer, payroll, purchases) the person/company is the useful name →
+   strip the type + reference and keep that. mode: "type" | "party". First match
+   wins, so list the more specific rule first (e.g. "service charge discount"
+   before "service charge"). */
+const TX_TYPE_RULES = [
+  [/^a[bt]m\s+deposit\b/i,                            "type",  "ATM Deposit"],
+  [/^a[bt]m\s+withdrawal\b/i,                         "type",  "ATM Withdrawal"],
+  [/^(?:mobile|cheque|cash)\s+deposit\b/i,            "type",  "Deposit"],
+  [/^service\s+charge\s+discount\b/i,                 "type",  "Service Charge Discount"],
+  [/^service\s+charge\b/i,                            "type",  "Service Charge"],
+  [/^(?:capped\s+)?monthly\s+(?:account\s+)?fee\b/i,  "type",  "Monthly Fee"],
+  [/^overdraft(?:\s+(?:interest|fee|handling))?\b/i,  "type",  "Overdraft"],
+  [/^interest\b/i,                                    "type",  "Interest"],
+  [/^reward\b/i,                                      "type",  "Reward"],
+  [/^internet\s+transfer\b/i,                         "type",  "Internet Transfer"],
+  [/^(?:online|mobile)\s+transfer\b/i,                "type",  "Transfer"],
+  [/^(?:interac\s+)?e-?transfer\b/i,                  "party", "E-Transfer"],
+  [/^(?:payroll(?:\s+deposit)?|direct\s+deposit)\b/i, "party", "Payroll"],
+  [/^pay(?=\s)/i,                                     "party", "Payroll"],  // "PAY <employer>" (not "PAY-O-MATIC")
+  [/^retail\s+purchase\b/i,                           "party", "Purchase"],
+  [/^(?:point of sale|pos)(?:\s+(?:purchase|debit))?\b/i, "party", "Purchase"],
+  [/^purchase\b/i,                                    "party", "Purchase"],
+  [/^bill\s+payment\b/i,                              "party", "Bill Payment"],
+  [/^pre-?authoriz(?:ed|ation)\s+(?:debit|payment|credit)?\b/i, "party", "Pre-Authorized"]
+];
+/* a leading machine/reference chunk sitting between the type and the payee
+   ("011574003512", "613000939123", a masked card…). Requires a 3+ char digit run
+   so it never eats a real name that merely starts with a number (e.g. "7-Eleven"). */
+const TX_REF_LEAD = /^(?:to\s+card\b|from\b|ref(?:erence)?\b|conf(?:irmation)?\b|trace\b|[:#-])?\s*(?:[A-Za-z]{0,4}\d[\d*xX]{2,}[\d*xX-]*\s*)+/i;
+function txTypedName(s) {
+  for (const [re, mode, label] of TX_TYPE_RULES) {
+    const m = re.exec(s);
+    if (!m) continue;
+    if (mode === "type") return label;                            // type is the name; drop location/ref
+    let rest = s.slice(m[0].length).replace(/^[\s:#-]+/, "");
+    rest = rest.replace(TX_REF_LEAD, "").trim();                  // drop the reference chunk
+    if ((rest.match(/[A-Za-z]/g) || []).length < 2) return label; // nothing useful left → the type is the name
+    return txCleanMerchantCore(rest);                             // clean the counterparty (alias, casing, city strip…)
+  }
+  return null;
+}
 function txCleanMerchant(raw) {
+  let s = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+  s = s.replace(/^[^A-Za-z0-9(]+/, "").trim();          // strip leading symbols (Ý, *, etc.)
+  if (!s) return "Transaction";
+  const typed = txTypedName(s);                         // bank entries lead with a transaction type
+  if (typed != null) return typed;
+  return txCleanMerchantCore(s);
+}
+function txCleanMerchantCore(raw) {
   let s = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
   s = s.replace(/^[^A-Za-z0-9(]+/, "").trim();          // strip leading symbols (Ý, *, etc.)
   if (!s) return "Transaction";
@@ -648,10 +706,11 @@ const TXB_HD = /deposit|credit|money in|paid in/i;
 const TXB_HB = /balance/i;
 /* page furniture that must never become a description or a transaction */
 const TXB_FURNITURE = /\b\d+\s+of\s+\d+\b|account statement|details of your account|important information|^from\b.*\bto\b.*\d{4}/i;
+const TXB_CONT = /\bcontinued\b/i;   // "(continued on next page)" / "(continued)" — closes the open txn, not detail
 function txParseBankColumns(pages) {
   let yearHint = new Date().getFullYear();
   outer: for (const pg of pages) for (const r of pg.rows) { const m = r.text.match(/(20\d{2})/); if (m) { yearHint = +m[1]; break outer; } }
-  let cols = null, curDate = null, buf = [];
+  let cols = null, curDate = null, buf = [], cur = null;
   const out = [];
   const colOf = (tx) => { let i = 0; while (i < cols.bounds.length && tx >= cols.bounds[i]) i++; return cols.hdrs[i].k; };
   for (const pg of pages) {
@@ -671,7 +730,7 @@ function txParseBankColumns(pages) {
     for (const r of pg.rows) {
       const t = r.text;
       if (TXB_HW.test(t) && TXB_HD.test(t)) continue;                         // the header row itself
-      if (TX_STMT_SKIP.test(t) || TXB_FURNITURE.test(t)) { buf = []; continue; }
+      if (TX_STMT_SKIP.test(t) || TXB_FURNITURE.test(t) || TXB_CONT.test(t)) { buf = []; cur = null; continue; }  // summary / page furniture / "(continued)" → close the open txn
       const dm = t.match(TXB_DATE);
       if (dm) { const d = txParseDate(dm[1].replace(/(\d)(?=[A-Za-z])/g, "$1 ").replace(/([A-Za-z])(?=\d)/g, "$1 "), yearHint); if (d) curDate = d; }
       let wd = null, dp = null, bal = false;
@@ -686,13 +745,26 @@ function txParseBankColumns(pages) {
       let desc = r.cells.filter((c) => !TXB_MONEY.test(c.s) && c.x >= (cols.descx - 6) && c.x < cols.descMax).map((c) => c.s).join(" ");
       if (dm) desc = desc.replace(TXB_DATE, "");
       desc = desc.replace(/\s+/g, " ").replace(/^[\s\-–·,]+|[\s\-–·,]+$/g, "").trim();
+      const hasDesc = (desc.match(/[A-Za-z]/g) || []).length >= 1;
       if (wd != null || dp != null) {
+        // An amount row STARTS a transaction. CIBC-style statements print the type
+        // ("ATM DEPOSIT", "E-TRANSFER 0115…") ON this row and the location/payee on
+        // the line(s) BELOW — so a row that carries its own description owns the
+        // detail lines that follow it. A row with no description of its own falls
+        // back to the lines buffered just above it (wrap-before layouts).
         const amt = dp != null ? dp : -wd;                                    // deposit +, withdrawal −
-        const name = (buf.join(" ") + " " + desc).trim();
-        if (curDate && (name.match(/[A-Za-z]/g) || []).length >= 2) out.push({ date: curDate, name, amt });
+        const name = hasDesc ? desc : buf.join(" ").trim();
+        if (curDate && (name.match(/[A-Za-z]/g) || []).length >= 2) {
+          const tx = { date: curDate, name, amt };
+          out.push(tx);
+          cur = hasDesc ? tx : null;                                          // only an own-desc row keeps collecting trailing detail
+        } else cur = null;
         buf = [];
-      } else if (bal) buf = [];                                              // balance-only row = boundary
-      else if (/[A-Za-z]/.test(desc)) buf.push(desc);                       // description-only line → stitch onto next amount
+      } else if (bal) { buf = []; cur = null; }                              // balance-only row = boundary between entries
+      else if (hasDesc) {
+        buf.push(desc);                                                       // may lead the NEXT amount row (wrap-before)
+        if (cur) cur.name = (cur.name + " " + desc).trim();                   // …and trails the CURRENT txn (wrap-after / CIBC)
+      }
     }
   }
   return out;

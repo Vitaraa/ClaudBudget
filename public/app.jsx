@@ -1880,6 +1880,8 @@ function currencyCode(c) { return (c || "").trim().split(/[\s\u2014-]/)[0] || "C
 
 function UpgradeModal({ currency, onClose }) {
   const [billing, setBilling] = useState("annual");
+  const [status, setStatus] = useState("idle");   // idle | working | success | error
+  const [errMsg, setErrMsg] = useState("");
   const code = currencyCode(currency);
   const sym = CURRENCY_SYMBOL[code] || "$";
   const monthly = 8;
@@ -1889,27 +1891,78 @@ function UpgradeModal({ currency, onClose }) {
   const proAmt = billing === "annual" ? annualPerMo : monthly;
   const proSub = billing === "annual" ? `${sym}${annualTotal} billed yearly` : "billed monthly";
 
+  const working = status === "working";
+
   useEffect(() => {
-    function onKey(e) { if (e.key === "Escape") onClose(); }
+    function onKey(e) { if (e.key === "Escape" && status !== "working") onClose(); }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, status]);
 
+  // Flip the account to Pro. We update the cached user in place + emit rather
+  // than re-running the full bootstrap: the plan flag is the only thing the
+  // upgrade changes, and a heavy refresh just causes the multi-second flicker
+  // behind the modal that reads as the window "closing and reopening". On
+  // success we swap to a confirmation screen so the upgrade is never silent.
+  function doUpgrade() {
+    if (working) return;
+    setErrMsg("");
+    setStatus("working");
+    window.ClaudAPI.setPlan("pro").then((res) => {
+      if (res && res.user && window.ClaudData) window.ClaudData.user = res.user;
+      else if (window.ClaudData && window.ClaudData.user) window.ClaudData.user.plan = "pro";
+      if (window.ClaudStore && window.ClaudStore.emit) window.ClaudStore.emit();   // unlock Pro across the app
+      setStatus("success");
+    }).catch((e) => {
+      setErrMsg((e && e.message) || "Something went wrong. Please try again.");
+      setStatus("error");
+    });
+  }
+
+  const backdropClose = (e) => { if (e.target === e.currentTarget && status !== "working") onClose(); };
+
+  // ---- confirmation screen (shown once the plan is live) ----
+  if (status === "success") {
+    return (
+      <div className="set-overlay" onClick={backdropClose}>
+        <div className="up" role="dialog" aria-modal="true" aria-label="You're on Pro" style={{ maxWidth: 460 }}>
+          <div className="up-success">
+            <div className="up-success-badge" aria-hidden="true"><Icon name="check" /></div>
+            <h2>You{"’"}re on Pro</h2>
+            <p>Your upgrade is live. Receipt scanning, Foresight and insights are unlocked across the app.</p>
+            <ul className="plan-feats up-success-feats">
+              {UP_PRO.map((f) => (
+                <li className="feat key" key={f.t}>
+                  <span className="feat-check"><Icon name="check" /></span>
+                  <div className="feat-body">
+                    <div className="feat-t">{f.t}</div>
+                    <div className="feat-d">{f.d}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <Button variant="primary" onClick={onClose}>Start using Pro</Button>
+          </div>
+        </div>
+      </div>);
+  }
+
+  // ---- plan chooser (idle / working / error) ----
   return (
-    <div className="set-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="set-overlay" onClick={backdropClose}>
       <div className="up cards" role="dialog" aria-modal="true" aria-label="Choose your plan">
         <div className="up-head">
           <div className="up-head-text">
             <h2>Choose your plan</h2>
             <p>Free keeps everything you track today. Pro adds receipt scanning, Foresight and insights.</p>
           </div>
-          <button className="up-close" aria-label="Close" onClick={onClose}>{"\u00D7"}</button>
+          <button className="up-close" aria-label="Close" onClick={onClose} disabled={working}>{"\u00D7"}</button>
         </div>
 
         <div className="up-billing">
           <div className="up-seg" role="tablist" aria-label="Billing period">
-            <button className={billing === "monthly" ? "on" : ""} onClick={() => setBilling("monthly")}>Monthly</button>
-            <button className={billing === "annual" ? "on" : ""} onClick={() => setBilling("annual")}>Annual</button>
+            <button className={billing === "monthly" ? "on" : ""} onClick={() => setBilling("monthly")} disabled={working}>Monthly</button>
+            <button className={billing === "annual" ? "on" : ""} onClick={() => setBilling("annual")} disabled={working}>Annual</button>
           </div>
           {billing === "annual" && <span className="up-save">Save {sym}{save} a year</span>}
         </div>
@@ -1948,7 +2001,8 @@ function UpgradeModal({ currency, onClose }) {
               <div className="plan-sub">{proSub}</div>
             </div>
             <p className="plan-line">Everything in Free, plus the features that do the reading for you.</p>
-            <Button variant="primary" onClick={() => { ClaudActions.setPlan("pro").then(() => onClose && onClose()); }}>Upgrade to Pro</Button>
+            <Button variant="primary" onClick={doUpgrade} disabled={working}>{working ? "Upgrading…" : "Upgrade to Pro"}</Button>
+            {status === "error" && <div className="up-err" role="alert"><Icon name="alert" />{errMsg}</div>}
             <ul className="plan-feats">
               <li className="feat">
                 <span className="feat-check"><Icon name="check" /></span>
