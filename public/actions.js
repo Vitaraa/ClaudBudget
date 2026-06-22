@@ -104,6 +104,8 @@
       return p.then(done).catch(fail);
     },
     deleteHolding: function (id) { return API.del('/api/holdings/' + id).then(done).catch(fail); },
+    // Sell some/all shares of a holding; proceeds settle into its account's cash.
+    sellHolding: function (id, shares, price) { return API.post('/api/holdings/' + id + '/sell', { shares: shares, price: price }).then(done).catch(fail); },
 
     // foresight
     addPlan: function (p) { return API.post('/api/foresight/plans', p).then(done).catch(fail); },

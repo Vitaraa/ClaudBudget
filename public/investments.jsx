@@ -492,7 +492,7 @@ function invCostBasisReturn(holdings) {
 /* ============================================================
    INVESTMENTS PAGE — KPIs, compare chart, editable holdings
    ============================================================ */
-function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
+function InvestmentsPage({ holdings, onOpen, onEdit, onDelete, onSell }) {
   const { Card, Segmented } = IV;
   const [period, setPeriod] = ivUseState("1Y");
   const [retMode, setRetMode] = ivUseState("%");
@@ -657,6 +657,10 @@ function InvestmentsPage({ holdings, onOpen, onEdit, onDelete }) {
                       <span className={"hold-day " + (h.day > 0 ? "pos" : h.day < 0 ? "neg" : "")} style={{ color: h.day === 0 ? "var(--muted)" : undefined }}>{invPct(h.day, 2)} today</span>
                     </div>
                     <span className="hold-actions">
+                      {onSell && h.kind !== "cash" && h.cls !== "Cash" &&
+                        <button className="hold-act" title={"Sell " + h.name} aria-label={"Sell " + h.name}
+                          style={{ width: "auto", padding: "0 9px", fontSize: 12, fontWeight: 600 }}
+                          onClick={(e) => { e.stopPropagation(); onSell(h); }}>Sell</button>}
                       <button className="hold-act" title="Edit position" aria-label={"Edit " + h.name}
                         onClick={(e) => { e.stopPropagation(); onEdit && onEdit(h); }}><Icon name="pencil" /></button>
                       <button className="hold-act del" title="Remove position" aria-label={"Remove " + h.name}
@@ -931,9 +935,84 @@ function InvDeleteModal({ holding, onCancel, onConfirm }) {
 }
 
 /* ============================================================
+   SELL POSITION MODAL — sell some/all shares; proceeds → account cash
+   ============================================================ */
+function SellHoldingModal({ holding, onClose, onSell }) {
+  const { Button } = IV;
+  const h = holding || {};
+  const acctName = (h.account_id && window.ClaudStore && ClaudStore.accountNameById && ClaudStore.accountNameById(h.account_id)) || null;
+  const held = Number(h.shares) || 0;
+  const livePrice = Number(h.price) || 0;
+  const [qty, setQty] = ivUseState(held ? String(held) : "");
+  const [px, setPx] = ivUseState(livePrice ? livePrice.toFixed(2) : "");
+  const [touched, setTouched] = ivUseState(false);
+
+  React.useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const toNum = (v) => parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
+  const q = toNum(qty), p = toNum(px);
+  const validQty = qty !== "" && !Number.isNaN(q) && q > 0 && q <= held + 1e-9;
+  const validPx = px !== "" && !Number.isNaN(p) && p > 0;
+  const valid = validQty && validPx;
+  const proceeds = valid ? Math.round(q * p * 100) / 100 : 0;
+  const remaining = Math.round((held - (valid ? q : 0)) * 10000) / 10000;
+
+  function submit() {
+    setTouched(true);
+    if (!valid) return;
+    onSell(q, p);
+  }
+
+  return (
+    <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fs-modal" role="dialog" aria-modal="true" aria-label={"Sell " + (h.name || h.ticker || "position")}>
+        <div className="fs-modal-head">
+          <span className="fs-modal-title"><span className="hold-mono" style={{ width: 40, height: 30, fontSize: 11 }}>{h.ticker || "—"}</span>Sell {h.name || h.ticker}</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+
+        <div className="fs-grid">
+          <label className="fs-field">
+            <span>Shares to sell</span>
+            <input type="number" inputMode="decimal" step="0.0001" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="0"
+              style={touched && !validQty ? { borderColor: "var(--red)" } : undefined} />
+          </label>
+          <label className="fs-field">
+            <span>Sale price / share ($)</span>
+            <input type="number" inputMode="decimal" step="0.01" value={px} onChange={(e) => setPx(e.target.value)} placeholder="0.00"
+              style={touched && !validPx ? { borderColor: "var(--red)" } : undefined} />
+          </label>
+          <div className="fs-field full">
+            <span>Holding</span>
+            <div className="fs-foot-note" style={{ color: "var(--muted)" }}>
+              {held} sh held · last price {invMoney(livePrice, 2)}{acctName ? " · " + acctName : ""}
+              {held > 0 && <React.Fragment> · <button type="button" style={{ background: "none", border: 0, color: "var(--accent)", cursor: "pointer", font: "inherit", padding: 0 }} onClick={() => { setQty(String(held)); setPx(livePrice ? livePrice.toFixed(2) : ""); }}>Sell all</button></React.Fragment>}
+            </div>
+          </div>
+        </div>
+
+        <div className="fs-modal-foot">
+          <span className="fs-foot-note">
+            Proceeds <b>{invMoney(proceeds, 2)}</b>{acctName ? <React.Fragment> → cash in <b>{acctName}</b></React.Fragment> : null}
+            {valid ? (remaining > 0 ? <React.Fragment> · {remaining} sh left</React.Fragment> : <React.Fragment> · position closed</React.Fragment>) : null}
+          </span>
+          <div className="right">
+            {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={submit}>Sell</Button>}
+          </div>
+        </div>
+      </div>
+    </div>);
+}
+
+/* ============================================================
    DETAIL PAGE — live-style quote, price chart, key stats
    ============================================================ */
-function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
+function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit, onSell }) {
   const { Card, Badge, Segmented } = IV;
   const [period, setPeriod] = ivUseState("1Y");
   const [confirm, setConfirm] = ivUseState(false);
@@ -1075,6 +1154,7 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
             <div className="ainfo-row"><span className="ainfo-k">Portfolio weight</span><span className="ainfo-v">{(h.value / (portfolioValue || h.value) * 100).toFixed(1)}%</span></div>
           </div>
           <button className="inv-edit-btn" onClick={() => onEdit && onEdit(h)}><Icon name="pencil" />Edit position</button>
+          {onSell && <button className="inv-edit-btn" style={{ marginTop: 8 }} onClick={() => onSell(h)}><Icon name="income" />Sell position</button>}
         </Card>
 
         <Card widget className="span4">
@@ -1119,4 +1199,4 @@ function InvestmentDetailPage({ holding, portfolioValue, onDelete, onEdit }) {
     </React.Fragment>);
 }
 
-Object.assign(window, { InvestmentsPage, InvestmentDetailPage, InvestmentModal, InvDeleteModal, INV_SEED });
+Object.assign(window, { InvestmentsPage, InvestmentDetailPage, InvestmentModal, InvDeleteModal, SellHoldingModal, INV_SEED });

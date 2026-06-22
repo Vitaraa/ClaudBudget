@@ -739,6 +739,31 @@ function register(router) {
     db.prepare('DELETE FROM holdings WHERE id=? AND user_id=?').run(ctx.params.id, ctx.user.id);
     ctx.json(200, { ok: true });
   }));
+  /* Sell some/all of a position. Proceeds (shares × sale price) settle into the
+     linked investment account's cash balance; the holding is reduced, or removed
+     when fully sold. A cash position can't be "sold" this way — delete it instead. */
+  router.post('/api/holdings/:id/sell', auth.requireAuth(async (req, res, ctx) => {
+    const uid = ctx.user.id;
+    const row = ownedRow('holdings', ctx.params.id, uid);
+    const b = ctx.body || {};
+    if (row.kind === 'cash') throw new HttpError(400, 'A cash position cannot be sold; remove it instead');
+    const have = Number(row.shares) || 0;
+    if (have <= 0) throw new HttpError(400, 'This position has no shares to sell');
+    let sell = b.shares != null ? num(b.shares, 'shares') : have;
+    if (!(sell > 0)) throw new HttpError(400, 'Shares to sell must be greater than zero');
+    if (sell > have) sell = have;                              // never sell more than held
+    let price = b.price != null ? num(b.price, 'price') : (Number(row.price) || 0);
+    if (!(price > 0)) price = Number(row.price) || 0;
+    const proceeds = round2(sell * price);
+    const remaining = round2(have - sell);
+    if (remaining > 0) {
+      db.prepare('UPDATE holdings SET shares=? WHERE id=? AND user_id=?').run(remaining, row.id, uid);
+    } else {
+      db.prepare('DELETE FROM holdings WHERE id=? AND user_id=?').run(row.id, uid);
+    }
+    if (row.account_id) adjustAccountBalance(uid, row.account_id, proceeds);   // proceeds settle as cash
+    ctx.json(200, { ok: true, sold: sell, proceeds: proceeds, remaining: remaining > 0 ? remaining : 0 });
+  }));
 
   /* -------------------------------------------------- MARKET QUOTES */
   /* Live market data. Auth-scoped (so the server isn't an open proxy).

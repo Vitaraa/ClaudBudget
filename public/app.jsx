@@ -2312,6 +2312,7 @@ function App() {
   const holdings = ClaudData.holdings;
   const [openHoldingId, setHoldingOpen] = useState(null);
   const [invModal, setInvModal] = useState(null);   // {mode:'add'} | {mode:'edit', holding}
+  const [sellHld, setSellHld] = useState(null);     // holding being sold via the Sell modal
   const [invDelete, setInvDelete] = useState(null);  // holding pending delete-confirm
   // insights + monthly review + reporting cycle
   const [notifOpen, setNotifOpen] = useState(false);
@@ -2703,7 +2704,7 @@ function App() {
 
           tab === "Accounts" ?
           (openAcct ?
-            <AccountDetailPage acct={openAcct} onDelete={() => { ClaudActions.deleteAccount(openAcct.id); setAcctOpen(null); }} /> :
+            <AccountDetailPage acct={openAcct} onSell={(h) => setSellHld(h)} onDelete={() => { ClaudActions.deleteAccount(openAcct.id); setAcctOpen(null); }} /> :
             <AccountsPage onOpen={setAcctOpen} deleted={deletedAccts} added={addedAccts} iconOv={acctIconOv} onSetIcon={(name, n) => { setAcctIconOv((p) => ({ ...p, [name]: n })); ClaudActions.setAccountIcon(name, n); }} />) :
 
           tab === "Transactions" ?
@@ -2725,10 +2726,12 @@ function App() {
           (openHolding ?
             <InvestmentDetailPage holding={openHolding} portfolioValue={portfolioTotal}
               onDelete={() => deleteHolding(openHolding.id)}
+              onSell={(h) => setSellHld(h)}
               onEdit={(h) => setInvModal({ mode: "edit", holding: h })} /> :
             <InvestmentsPage holdings={holdings}
               onOpen={(h) => setHoldingOpen(h.id)}
               onEdit={(h) => setInvModal({ mode: "edit", holding: h })}
+              onSell={(h) => setSellHld(h)}
               onDelete={(id) => setInvDelete(holdings.find((x) => x.id === id) || null)} />) :
 
           tab === "Foresight" ?
@@ -2772,6 +2775,7 @@ function App() {
 
       {/* ---- Add / edit investment ---- */}
       {invModal && <InvestmentModal modal={invModal} onClose={() => setInvModal(null)} onSave={saveHolding} onDelete={(id) => { setInvModal(null); setInvDelete(holdings.find((x) => x.id === id) || null); }} />}
+      {sellHld && window.SellHoldingModal && <SellHoldingModal holding={sellHld} onClose={() => setSellHld(null)} onSell={(sh, pr) => { ClaudActions.sellHolding(sellHld.id, sh, pr); setSellHld(null); }} />}
 
       {/* ---- Delete investment confirm ---- */}
       {invDelete && <InvDeleteModal holding={invDelete} onCancel={() => setInvDelete(null)} onConfirm={() => { deleteHolding(invDelete.id); setInvDelete(null); }} />}
