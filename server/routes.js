@@ -307,7 +307,7 @@ function register(router) {
     const to = process.env.FEEDBACK_TO || 'feedback@claudapps.ca';
     const tmpl = mailer.templates.feedback({ kind, severity, message, email, context });
     try {
-      await mailer.sendEmail({ to, subject: tmpl.subject, html: tmpl.html, text: tmpl.text, replyTo: email || undefined });
+      await mailer.sendEmail({ to, subject: tmpl.subject, html: tmpl.html, text: tmpl.text, replyTo: email || undefined, from: process.env.FEEDBACK_FROM || undefined });
     } catch (e) {
       console.error('feedback email failed:', e);
       throw new HttpError(502, "Couldn't send your feedback right now — please try again in a moment.");

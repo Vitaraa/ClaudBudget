@@ -42,7 +42,7 @@ function link(pathname, params) {
 }
 
 /* ---------------------------------------------------------------- provider */
-async function sendViaResend({ to, subject, html, text, replyTo }) {
+async function sendViaResend({ to, subject, html, text, replyTo, from }) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -53,7 +53,7 @@ async function sendViaResend({ to, subject, html, text, replyTo }) {
         'Authorization': 'Bearer ' + process.env.EMAIL_API_KEY,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(Object.assign({ from: FROM(), to: [to], subject, html, text }, replyTo ? { reply_to: replyTo } : {}))
+      body: JSON.stringify(Object.assign({ from: from || FROM(), to: [to], subject, html, text }, replyTo ? { reply_to: replyTo } : {}))
     });
     const body = await res.text();
     if (!res.ok) throw new Error('Resend HTTP ' + res.status + ': ' + body.slice(0, 300));
@@ -67,7 +67,7 @@ async function sendViaResend({ to, subject, html, text, replyTo }) {
 /* sendEmail({ to, subject, html, text }) -> { ok, dev? }
    Never throws for the "no provider configured" case (logs instead); does
    surface real provider errors so callers can decide how loud to be. */
-async function sendEmail({ to, subject, html, text, replyTo }) {
+async function sendEmail({ to, subject, html, text, replyTo, from }) {
   if (!configured()) {
     // Dev fallback — surface the action link prominently so flows are testable.
     const urlMatch = String(text || html || '').match(/https?:\/\/\S+/);
@@ -78,7 +78,7 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
     console.log('');
     return { ok: true, dev: true };
   }
-  if (provider() === 'resend') return sendViaResend({ to, subject, html, text, replyTo });
+  if (provider() === 'resend') return sendViaResend({ to, subject, html, text, replyTo, from });
   throw new Error('Unknown EMAIL_PROVIDER: ' + provider());
 }
 
