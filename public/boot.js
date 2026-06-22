@@ -102,7 +102,7 @@
     quotes: function (symbols) { return request('GET', '/api/quotes' + (symbols && symbols.length ? ('?symbols=' + encodeURIComponent(symbols.join(','))) : '')); },
     fx: function (symbols, base) { return request('GET', '/api/fx?base=' + encodeURIComponent(base || 'CAD') + (symbols && symbols.length ? ('&symbols=' + encodeURIComponent(symbols.join(','))) : '')); },
     quotesHistory: function (symbol, period) { return request('GET', '/api/quotes/history?symbol=' + encodeURIComponent(symbol) + '&period=' + encodeURIComponent(period || '1Y')); },
-    portfolioSeries: function (period) { return request('GET', '/api/portfolio/series?period=' + encodeURIComponent(period || '1Y')); },
+    portfolioSeries: function (period, account) { return request('GET', '/api/portfolio/series?period=' + encodeURIComponent(period || '1Y') + (account ? '&account=' + encodeURIComponent(account) : '')); },
     logout: function () { setToken(null); location.assign('/'); }
   };
 

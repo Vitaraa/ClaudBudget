@@ -82,6 +82,40 @@ function acMonthlyBalanceSeries(txns, currentBal, n = 24) {
   return buckets.map((b, i) => ({ label: b.label, value: vals[i] }));
 }
 
+/* Live per-account total-value series from the server -- real market history
+   (the account's cash sleeve + each holding's price candles), so the chart
+   moves week-to-week/day-to-day like the Investments tab. Returns null until
+   it loads (or when skipped / offline) so the chart falls back to the
+   back-derived monthly balance series. */
+function acUsePortfolioSeries(period, accountId, skip) {
+  const [data, setData] = acUseState(null);
+  React.useEffect(() => {
+    if (skip || !accountId || !window.ClaudAPI || !window.ClaudAPI.portfolioSeries) { setData(null); return; }
+    let alive = true; setData(null);
+    window.ClaudAPI.portfolioSeries(period, accountId)
+      .then((r) => { if (alive) setData(r && r.available && Array.isArray(r.portfolio) && r.portfolio.length > 1 ? r : null); })
+      .catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, [period, accountId, skip]);
+  return data;
+}
+
+/* Unrealized gain vs cost basis over an account's non-cash holdings. Mirrors
+   the Investments tab's invCostBasisReturn so the account page shows the same
+   "Total return". Holdings with no recorded cost are skipped from the cost side. */
+function acCostBasisReturn(holdings) {
+  let cost = 0, value = 0;
+  for (const h of holdings || []) {
+    const isCash = h.cls === "Cash" || h.kind === "cash" || String(h.ticker).toUpperCase() === "CASH";
+    if (isCash) continue;
+    if (h.shares == null || h.cost == null || !(h.shares * h.cost > 0)) continue;
+    cost += h.shares * h.cost * (h.fxRate || 1);
+    value += (Number(h.value) || 0);
+  }
+  const gain = value - cost;
+  return { cost: cost, value: value, gain: gain, pct: cost > 0 ? gain / cost * 100 : 0, hasCost: cost > 0 };
+}
+
 /* ============================================================
    Per-account extended data, keyed by account name.
    history: 24 monthly closing balances. txns: recent activity.
@@ -304,7 +338,7 @@ function AcctDeleteModal({ acct, onCancel, onConfirm }) {
 /* ============================================================
    ACCOUNT DETAIL PAGE
    ============================================================ */
-function AccountDetailPage({ acct, onDelete, onSell }) {
+function AccountDetailPage({ acct, onDelete, onSell, onOpenHolding }) {
   const { Card, Badge, Segmented } = AC;
   // re-render when the server store changes (after recat / icon / remove persist)
   const data = (window.useClaudData ? window.useClaudData() : window.ClaudData) || {};
@@ -321,6 +355,23 @@ function AccountDetailPage({ acct, onDelete, onSell }) {
   // Investment account total = cash sleeve (acct.bal) + live value of its securities.
   const securities = isInvestment ? Math.round(acctHoldings.reduce((s, hh) => s + (Number(hh.value) || 0), 0) * 100) / 100 : 0;
   const totalValue = Math.round(((Number(acct.bal) || 0) + securities) * 100) / 100;
+
+  // Today's market move across this account's holdings (h.day is 0 until live
+  // quotes land), plus the unrealized gain vs cost basis -- the same figures the
+  // Investments tab surfaces.
+  const dayDollar = isInvestment ? acctHoldings.reduce((s, hh) => s + (Number(hh.value) || 0) * (Number(hh.day) || 0) / 100, 0) : 0;
+  const dayPct = securities ? dayDollar / securities * 100 : 0;
+  const cb = isInvestment ? acCostBasisReturn(acctHoldings) : { hasCost: false, gain: 0, pct: 0 };
+
+  // Real market-driven value series for the chart (investment accounts only);
+  // also keep quotes fresh while this page is open so day-change/value update.
+  const liveSeries = acUsePortfolioSeries(period, acct.id, !isInvestment);
+  React.useEffect(() => {
+    if (!isInvestment || !(window.ClaudStore && window.ClaudStore.refreshQuotes)) return;
+    window.ClaudStore.refreshQuotes();
+    const id = setInterval(() => { window.ClaudStore.refreshQuotes(); }, 60000);
+    return () => clearInterval(id);
+  }, [isInvestment]);
 
   // categories offered when recategorizing here = built-in ∪ budgets ∪ account-specific (Transfer / Investment)
   const acCats = () => ({ ...((window.getCatColors && window.getCatColors()) || {}), ...AC_CAT_COLORS });
@@ -345,8 +396,20 @@ function AccountDetailPage({ acct, onDelete, onSell }) {
   const n = AC_PERIODS[period];
   const fullSeries = acMonthlyBalanceSeries(txns, isInvestment ? totalValue : acct.bal, 24);
   const sliced = fullSeries.slice(-n);
-  const hist = sliced.map((s) => s.value);
-  const labels = sliced.map((s) => s.label);
+
+  // Investment accounts prefer the live market series (reflects daily change),
+  // rescaled so its end point equals the live current total value.
+  let liveHist = null, liveLabels = null;
+  if (isInvestment && liveSeries && Array.isArray(liveSeries.portfolio) && liveSeries.portfolio.length > 1) {
+    const raw = liveSeries.portfolio;
+    const endRaw = raw[raw.length - 1];
+    const scale = endRaw ? totalValue / endRaw : 1;
+    liveHist = raw.map((v) => Math.round((Number(v) || 0) * scale * 100) / 100);
+    liveLabels = Array.isArray(liveSeries.labels) && liveSeries.labels.length === raw.length ? liveSeries.labels : raw.map(() => "");
+  }
+  const useLive = !!liveHist;
+  const hist = useLive ? liveHist : sliced.map((s) => s.value);
+  const labels = useLive ? liveLabels : sliced.map((s) => s.label);
 
   // change over the visible window
   const winChg = hist[hist.length - 1] - hist[0];
@@ -372,11 +435,13 @@ function AccountDetailPage({ acct, onDelete, onSell }) {
             <span className="widget-eyebrow">{isInvestment ? "Total value" : (isCredit ? "Current balance" : "Balance")}</span>
             <div className="nw-headline">
               <span className={"nw-value " + ((isInvestment ? totalValue : acct.bal) < 0 ? "neg" : "")}>{acMoney(isInvestment ? totalValue : acct.bal, 2)}</span>
-              {Badge && <Badge tone={acct.chg >= 0 ? "pos" : "neg"}>{acct.chg >= 0 ? "\u2191" : "\u2193"} {acSigned(acct.chg, 0)} · {acPct(monthPct)}</Badge>}
+              {Badge && (isInvestment
+                ? <Badge tone={dayDollar >= 0 ? "pos" : "neg"}>{dayDollar >= 0 ? "\u2191" : "\u2193"} {acSigned(dayDollar, 0)} · {acPct(dayPct, 2)} today</Badge>
+                : <Badge tone={acct.chg >= 0 ? "pos" : "neg"}>{acct.chg >= 0 ? "\u2191" : "\u2193"} {acSigned(acct.chg, 0)} · {acPct(monthPct)}</Badge>)}
             </div>
             <div className="acct-detail-sub">
               {isInvestment
-                ? <React.Fragment>{acMoney(acct.bal, 2)} cash · {acMoney(securities, 2)} in holdings</React.Fragment>
+                ? <React.Fragment>{acMoney(acct.bal, 2)} cash · {acMoney(securities, 2)} in holdings · {acct.chg >= 0 ? "up " : "down "}{acMoney(Math.abs(winChg), 0)} over {period === "All" ? "2 years" : period === "1Y" ? "the past year" : "the past " + period}</React.Fragment>
                 : <React.Fragment>{acct.chg >= 0 ? "Up " : "Down "}{acMoney(Math.abs(winChg), 0)} over {period === "All" ? "2 years" : period === "1Y" ? "the past year" : "the past " + period}</React.Fragment>}
             </div>
           </div>
@@ -387,29 +452,40 @@ function AccountDetailPage({ acct, onDelete, onSell }) {
 
       {/* KPI strip */}
       <div className="kpi-3">
-        <Card widget><div className="kpi">
-          <span className="kpi-label">{isInvestment ? "Cash" : (isCredit ? "Balance owed" : "Current balance")}</span>
-          <span className={"kpi-val " + (acct.bal < 0 ? "neg" : "")}>{acMoney(acct.bal, 2)}</span>
-          <span className="kpi-delta" style={{ color: "var(--muted)" }}>synced 2h ago</span>
-        </div></Card>
-        <Card widget><div className="kpi">
-          <span className="kpi-label">Change · 30 days</span>
-          <span className="kpi-val" style={{ color: acct.chg >= 0 ? "var(--green)" : "var(--red)" }}>{acSigned(acct.chg, 0)}</span>
-          <span className={"kpi-delta " + (acct.chg >= 0 ? "pos" : "neg")}>{acct.chg >= 0 ? "\u2191" : "\u2193"} {acPct(monthPct)} this month</span>
-        </div></Card>
-        {isInvestment ?
+        {isInvestment ? <React.Fragment>
+          <Card widget><div className="kpi">
+            <span className="kpi-label">Today</span>
+            <span className="kpi-val" style={{ color: dayDollar > 0 ? "var(--green)" : dayDollar < 0 ? "var(--red)" : "var(--muted)" }}>{acSigned(dayDollar, 0)}</span>
+            <span className={"kpi-delta " + (dayDollar >= 0 ? "pos" : "neg")}>{dayDollar >= 0 ? "\u2191" : "\u2193"} {acPct(dayPct, 2)} today</span>
+          </div></Card>
+          <Card widget><div className="kpi">
+            <span className="kpi-label">Unrealized gain</span>
+            <span className={"kpi-val " + (cb.hasCost ? (cb.gain >= 0 ? "pos" : "neg") : "")}>{cb.hasCost ? acSigned(cb.gain, 0) : "\u2014"}</span>
+            <span className={"kpi-delta " + (cb.hasCost ? (cb.gain >= 0 ? "pos" : "neg") : "")} style={cb.hasCost ? undefined : { color: "var(--muted)" }}>{cb.hasCost ? (cb.gain >= 0 ? "\u2191" : "\u2193") + " " + acPct(cb.pct) + " all time" : "add avg cost to track"}</span>
+          </div></Card>
           <Card widget><div className="kpi">
             <span className="kpi-label">Holdings</span>
             <span className="kpi-val">{acMoney(securities, 2)}</span>
             <span className="kpi-delta" style={{ color: "var(--muted)" }}>{acctHoldings.filter((hh) => hh.kind !== "cash" && hh.cls !== "Cash").length} position{acctHoldings.filter((hh) => hh.kind !== "cash" && hh.cls !== "Cash").length === 1 ? "" : "s"}</span>
           </div></Card>
-        : extra.stat &&
+        </React.Fragment> : <React.Fragment>
           <Card widget><div className="kpi">
-            <span className="kpi-label">{extra.stat.label}</span>
-            <span className={"kpi-val " + (extra.stat.tone === "pos" ? "pos" : "")}>{extra.stat.value}</span>
-            <span className="kpi-delta" style={{ color: "var(--muted)" }}>{extra.stat.sub}</span>
+            <span className="kpi-label">{isCredit ? "Balance owed" : "Current balance"}</span>
+            <span className={"kpi-val " + (acct.bal < 0 ? "neg" : "")}>{acMoney(acct.bal, 2)}</span>
+            <span className="kpi-delta" style={{ color: "var(--muted)" }}>synced 2h ago</span>
           </div></Card>
-        }
+          <Card widget><div className="kpi">
+            <span className="kpi-label">Change · 30 days</span>
+            <span className="kpi-val" style={{ color: acct.chg >= 0 ? "var(--green)" : "var(--red)" }}>{acSigned(acct.chg, 0)}</span>
+            <span className={"kpi-delta " + (acct.chg >= 0 ? "pos" : "neg")}>{acct.chg >= 0 ? "\u2191" : "\u2193"} {acPct(monthPct)} this month</span>
+          </div></Card>
+          {extra.stat &&
+            <Card widget><div className="kpi">
+              <span className="kpi-label">{extra.stat.label}</span>
+              <span className={"kpi-val " + (extra.stat.tone === "pos" ? "pos" : "")}>{extra.stat.value}</span>
+              <span className="kpi-delta" style={{ color: "var(--muted)" }}>{extra.stat.sub}</span>
+            </div></Card>}
+        </React.Fragment>}
       </div>
 
       {/* Holdings — investment accounts only: sell a position, proceeds settle to this account's cash */}
@@ -427,19 +503,26 @@ function AccountDetailPage({ acct, onDelete, onSell }) {
             <div className="hold-list">
               {acctHoldings.map((hld) => {
                 const isCashH = hld.kind === "cash" || hld.cls === "Cash";
+                const openIt = () => onOpenHolding && onOpenHolding(hld);
                 return (
-                  <div className="hold-row" key={hld.id}>
+                  <div className={"hold-row" + (onOpenHolding ? " clickable" : "")} key={hld.id}
+                    role={onOpenHolding ? "button" : undefined} tabIndex={onOpenHolding ? 0 : undefined}
+                    onClick={onOpenHolding ? openIt : undefined}
+                    onKeyDown={onOpenHolding ? ((e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIt(); } }) : undefined}>
                     <span className="hold-mono">{isCashH ? "$" : hld.ticker}</span>
                     <div className="hold-body">
                       <span className="hold-name">{hld.name}</span>
                       <span className="hold-meta">{hld.cls}{!isCashH && hld.shares != null ? " · " + hld.shares + " sh · " + acMoney(hld.price, 2) : ""}</span>
                     </div>
-                    <div className="hold-right"><span className="hold-val">{acMoney(hld.value, 2)}</span></div>
+                    <div className="hold-right">
+                      <span className="hold-val">{acMoney(hld.value, 2)}</span>
+                      {!isCashH && <span className={"hold-day " + (hld.day > 0 ? "pos" : hld.day < 0 ? "neg" : "")} style={(hld.day == null || hld.day === 0) ? { color: "var(--muted)" } : undefined}>{acPct(Number(hld.day) || 0, 2)} today</span>}
+                    </div>
                     <span className="hold-actions">
                       {!isCashH && onSell &&
                         <button className="hold-act" title={"Sell " + hld.name} aria-label={"Sell " + hld.name}
                           style={{ width: "auto", padding: "0 9px", fontSize: 12, fontWeight: 600 }}
-                          onClick={() => onSell(hld)}>Sell</button>}
+                          onClick={(e) => { e.stopPropagation(); onSell(hld); }}>Sell</button>}
                     </span>
                   </div>);
               })}

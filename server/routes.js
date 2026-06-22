@@ -277,6 +277,44 @@ function register(router) {
     ctx.json(200, { ok: true, message: 'Your password has been reset. Please sign in.' });
   });
 
+  /* ----------------------------------------------------------- FEEDBACK */
+  // In-app bug reports & feature requests (the Help modal). Authenticated —
+  // the modal lives behind sign-in — and rate-limited to deter abuse. Emails
+  // the submission to FEEDBACK_TO via the shared mailer, with the submitter
+  // set as reply-to so a reply reaches them. A real provider failure surfaces
+  // as a retryable 502 (we won't claim "sent" when it wasn't); when no mail
+  // provider is configured, sendEmail no-ops and we still return 200.
+  router.post('/api/feedback', auth.requireAuth(async (req, res, ctx) => {
+    const user = ctx.user;
+    const kind = str(ctx.body.kind, 'kind', { required: true });
+    if (kind !== 'bug' && kind !== 'feature') throw new HttpError(400, 'kind must be "bug" or "feature"');
+    const message = str(ctx.body.message, 'message', { required: true, max: 4000 });
+    const severity = kind === 'bug' ? (str(ctx.body.severity, 'severity', { max: 24 }) || 'Minor') : null;
+    const email = str(ctx.body.email, 'email', { max: 200 }) || user.email || '';
+    const cin = (ctx.body.context && typeof ctx.body.context === 'object') ? ctx.body.context : {};
+    const context = {
+      url: str(cin.url, 'url', { max: 500 }),
+      screen: str(cin.screen, 'screen', { max: 40 }),
+      ua: str(cin.ua, 'ua', { max: 400 }),
+      userId: user.id
+    };
+
+    const ip = ratelimit.clientIp(req);
+    if (!ratelimit.allow('feedback:ip:' + ip, 20, 60 * 60 * 1000) ||
+        !ratelimit.allow('feedback:uid:' + user.id, 10, 60 * 60 * 1000))
+      throw new HttpError(429, 'Too many submissions — please try again in a bit');
+
+    const to = process.env.FEEDBACK_TO || 'feedback@claudapps.ca';
+    const tmpl = mailer.templates.feedback({ kind, severity, message, email, context });
+    try {
+      await mailer.sendEmail({ to, subject: tmpl.subject, html: tmpl.html, text: tmpl.text, replyTo: email || undefined });
+    } catch (e) {
+      console.error('feedback email failed:', e);
+      throw new HttpError(502, "Couldn't send your feedback right now — please try again in a moment.");
+    }
+    ctx.json(200, { ok: true, message: 'Thanks — your feedback has been sent.' });
+  }));
+
   /* ---------------------------------------------------- GOOGLE OAUTH */
   // Step 1 — redirect to Google's consent screen (with CSRF state).
   router.get('/api/auth/google/start', async (req, res, ctx) => {
@@ -818,11 +856,29 @@ function register(router) {
   }));
 
   // Real portfolio-vs-S&P 500 series, weighted from the user's holdings.
+  // Optional ?account=<id> scopes the series to a single account's holdings and
+  // folds in that account's cash sleeve (its stored balance) so the resulting
+  // `portfolio` curve is the account's TOTAL value over time — used by the
+  // account detail page's live "Total value" chart.
   router.get('/api/portfolio/series', auth.requireAuth(async (req, res, ctx) => {
+    const uid = ctx.user.id;
     const period = str(ctx.query.get('period'), 'period') || '1Y';
-    const holdings = db.prepare(
-      `SELECT ticker, kind, shares, price FROM holdings WHERE user_id = ?`
-    ).all(ctx.user.id);
+    const accountId = str(ctx.query.get('account'), 'account');   // optional
+    let holdings;
+    if (accountId) {
+      holdings = db.prepare(
+        `SELECT ticker, kind, shares, price FROM holdings WHERE user_id = ? AND account_id = ?`
+      ).all(uid, accountId);
+      // Fold the account's loose cash sleeve into the series as a flat cash holding
+      // so the curve reflects the account's total value, not just its securities.
+      const acct = db.prepare('SELECT balance FROM accounts WHERE id = ? AND user_id = ?').get(accountId, uid);
+      const cash = acct && typeof acct.balance === 'number' ? acct.balance : 0;
+      if (cash) holdings = holdings.concat([{ ticker: 'CASH', kind: 'cash', shares: 1, price: cash }]);
+    } else {
+      holdings = db.prepare(
+        `SELECT ticker, kind, shares, price FROM holdings WHERE user_id = ?`
+      ).all(uid);
+    }
     let data = null;
     try { data = await quotes.getPortfolioSeries(holdings, period); } catch (e) { console.error('series failed:', e); }
     if (!data) return ctx.json(200, { period, available: false });

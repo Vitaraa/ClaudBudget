@@ -1736,6 +1736,8 @@ function HelpModal({ onClose }) {
   const [text, setText] = useState("");
   const [severity, setSeverity] = useState("Minor");
   const [email, setEmail] = useState((window.ClaudData && ClaudData.user && ClaudData.user.email) || "");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     function onKey(e) { if (e.key === "Escape") onClose(); }
@@ -1743,7 +1745,7 @@ function HelpModal({ onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const go = (v) => { setView(v); setSent(null); setText(""); setSeverity("Minor"); };
+  const go = (v) => { setView(v); setSent(null); setText(""); setSeverity("Minor"); setError(""); setSending(false); };
 
   const OPTIONS = [
     { id: "bug", icon: "bug", title: "Report a bug", desc: "Something looks wrong or isn't working." },
@@ -1752,7 +1754,32 @@ function HelpModal({ onClose }) {
   ];
   const titleOf = { bug: "Report a bug", feature: "Request a feature", faq: "Frequently asked questions" };
 
-  const submit = (kind) => { if (kind !== "faq" && !text.trim()) return; setSent(kind); };
+  const submit = async (kind) => {
+    if (kind === "faq" || !text.trim() || sending) return;
+    setError("");
+    setSending(true);
+    try {
+      const api = window.ClaudAPI;
+      if (api && api.post) {
+        await api.post("/api/feedback", {
+          kind: kind,
+          severity: kind === "bug" ? severity : null,
+          message: text.trim(),
+          email: email.trim(),
+          context: {
+            url: location.href,
+            screen: (window.screen ? window.screen.width + "x" + window.screen.height : ""),
+            ua: (navigator && navigator.userAgent) || ""
+          }
+        });
+      }
+      setSent(kind);
+    } catch (e) {
+      setError((e && e.message) || "Couldn't send right now — please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div className="set-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -1768,7 +1795,7 @@ function HelpModal({ onClose }) {
         <div className="hs-body">
           {view === "home" &&
             <React.Fragment>
-              <p className="hs-intro">How can we help? Pick a topic below — or email <a href="mailto:support@claud.app" className="hs-link">support@claud.app</a> and we'll get back to you within a day.</p>
+              <p className="hs-intro">How can we help? Pick a topic below — or email <a href="mailto:support@claudapps.ca" className="hs-link">support@claudapps.ca</a> and we'll get back to you within a day.</p>
               <div className="hs-options">
                 {OPTIONS.map((o) =>
                   <button key={o.id} className="hs-option" onClick={() => go(o.id)}>
@@ -1814,9 +1841,10 @@ function HelpModal({ onClose }) {
                 <span className="hs-field-label">Your email</span>
                 <input className="hs-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
               </label>
+              {error && <p className="hs-note" style={{ color: "var(--red)" }} role="alert">{error}</p>}
               <div className="hs-form-foot">
                 <span className="hs-note">{view === "bug" ? "Diagnostics about your current screen are attached automatically." : "We read every request, even if we can't build them all."}</span>
-                {Button && <Button variant="primary" size="sm" onClick={() => submit(view)} disabled={!text.trim()}>{view === "bug" ? "Send report" : "Send request"}</Button>}
+                {Button && <Button variant="primary" size="sm" onClick={() => submit(view)} disabled={!text.trim() || sending}>{sending ? "Sending…" : (view === "bug" ? "Send report" : "Send request")}</Button>}
               </div>
             </div>)
           }
@@ -1824,7 +1852,7 @@ function HelpModal({ onClose }) {
           {view === "faq" &&
             <div className="hs-faqs">
               {HELP_FAQ.map((f, i) => <HelpFaqItem key={i} q={f.q} a={f.a} />)}
-              <p className="hs-faq-foot">Didn't find it? <button className="hs-link as-btn" onClick={() => go("bug")}>Report a bug</button> or email <a href="mailto:support@claud.app" className="hs-link">support@claud.app</a>.</p>
+              <p className="hs-faq-foot">Didn't find it? <button className="hs-link as-btn" onClick={() => go("bug")}>Report a bug</button> or email <a href="mailto:support@claudapps.ca" className="hs-link">support@claudapps.ca</a>.</p>
             </div>
           }
         </div>
@@ -2298,6 +2326,7 @@ function App() {
   const [currency, setCurrency] = useState(CURRENCIES[0]);
   const [navOpen, setNavOpen] = useState(false);
   const [acctOpen, setAcctOpen] = useState(null);
+  const [acctHoldingId, setAcctHoldingId] = useState(null);   // holding opened from within an account's page
   const [deletedAccts, setDeletedAccts] = useState([]);
   const [addedAccts, setAddedAccts] = useState([]);
   const [acctIconOv, setAcctIconOv] = useState({});
@@ -2334,6 +2363,8 @@ function App() {
 
   // leaving the Accounts tab closes any open account
   useEffect(() => { if (tab !== "Accounts") setAcctOpen(null); if (tab !== "Investments") setHoldingOpen(null); }, [tab]);
+  // closing or switching the open account drops any holding opened from within it
+  useEffect(() => { setAcctHoldingId(null); }, [acctOpen]);
 
   // close the mobile nav drawer on Escape
   useEffect(() => {
@@ -2391,6 +2422,9 @@ function App() {
   }, [currency]);
   const openAcct = tab === "Accounts" && acctOpen ? (findAccount(acctOpen) || addedAccts.find((a) => a.name === acctOpen) || null) : null;
   const openHolding = tab === "Investments" && openHoldingId ? (holdings.find((h) => h.id === openHoldingId) || null) : null;
+  // A holding opened from inside an account's own page (Accounts tab). Reuses the
+  // exact same InvestmentDetailPage as the Investments tab; back returns to the account.
+  const openAcctHolding = tab === "Accounts" && openAcct && acctHoldingId ? (holdings.find((h) => h.id === acctHoldingId) || null) : null;
   const portfolioTotal = holdings.reduce((s, h) => s + h.value, 0);
 
   const saveHolding = (h) => { ClaudActions.saveHolding(h); setInvModal(null); };
@@ -2488,11 +2522,17 @@ function App() {
           <VerifyBanner />
           <header className="page-head">
             {openAcct ?
+            (openAcctHolding ?
+            <div>
+              <button className="back-link" onClick={() => setAcctHoldingId(null)}><Icon name="arrowL" />{openAcct.name}</button>
+              <h1>{openAcctHolding.cls === "Cash" ? openAcctHolding.name : openAcctHolding.ticker}</h1>
+              <p className="page-sub">{openAcctHolding.cls === "Cash" ? openAcctHolding.cls + " position" : openAcctHolding.name + " · " + openAcctHolding.cls}</p>
+            </div> :
             <div>
               <button className="back-link" onClick={() => setAcctOpen(null)}><Icon name="arrowL" />Accounts</button>
               <h1>{openAcct.name}</h1>
               <p className="page-sub">{openAcct.inst} {"\u00B7\u00B7\u00B7\u00B7"} {openAcct.mask} · {openAcct.group}</p>
-            </div> :
+            </div>) :
             openHolding ?
             <div>
               <button className="back-link" onClick={() => setHoldingOpen(null)}><Icon name="arrowL" />Investments</button>
@@ -2546,7 +2586,7 @@ function App() {
                 </div>}
               {!openAcct && !openHolding && PAGE_ACTION[tab] && Button && <Button variant="primary" size="sm" onClick={() => { if (tab === "Accounts") setAddOpen(true); else if (tab === "Transactions") setAddTxnOpen(true); else if (tab === "Budget") window.dispatchEvent(new CustomEvent("claud:add-budget")); else if (tab === "Goals") window.dispatchEvent(new CustomEvent("claud:add-goal")); else if (tab === "Investments") setInvModal({ mode: "add" }); }}>+ {PAGE_ACTION[tab]}</Button>}
               {/* On an investment account's own page, buy/track a position here (pre-targeted to this account); selling/editing lives in the Investments tab. */}
-              {openAcct && !openHolding && Button && isInvAcct(openAcct) && <Button variant="primary" size="sm" onClick={() => setInvModal({ mode: "add", accountId: openAcct.id })}>+ Add investment</Button>}
+              {openAcct && !openHolding && !openAcctHolding && Button && isInvAcct(openAcct) && <Button variant="primary" size="sm" onClick={() => setInvModal({ mode: "add", accountId: openAcct.id })}>+ Add investment</Button>}
             </div>
           </header>
 
@@ -2704,7 +2744,12 @@ function App() {
 
           tab === "Accounts" ?
           (openAcct ?
-            <AccountDetailPage acct={openAcct} onSell={(h) => setSellHld(h)} onDelete={() => { ClaudActions.deleteAccount(openAcct.id); setAcctOpen(null); }} /> :
+            (openAcctHolding ?
+              <InvestmentDetailPage holding={openAcctHolding} portfolioValue={portfolioTotal}
+                onDelete={() => { deleteHolding(openAcctHolding.id); setAcctHoldingId(null); }}
+                onSell={(h) => setSellHld(h)}
+                onEdit={(h) => setInvModal({ mode: "edit", holding: h })} /> :
+              <AccountDetailPage acct={openAcct} onOpenHolding={(h) => setAcctHoldingId(h.id)} onSell={(h) => setSellHld(h)} onDelete={() => { ClaudActions.deleteAccount(openAcct.id); setAcctOpen(null); }} />) :
             <AccountsPage onOpen={setAcctOpen} deleted={deletedAccts} added={addedAccts} iconOv={acctIconOv} onSetIcon={(name, n) => { setAcctIconOv((p) => ({ ...p, [name]: n })); ClaudActions.setAccountIcon(name, n); }} />) :
 
           tab === "Transactions" ?

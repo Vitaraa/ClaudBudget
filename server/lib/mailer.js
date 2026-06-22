@@ -42,7 +42,7 @@ function link(pathname, params) {
 }
 
 /* ---------------------------------------------------------------- provider */
-async function sendViaResend({ to, subject, html, text }) {
+async function sendViaResend({ to, subject, html, text, replyTo }) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -53,7 +53,7 @@ async function sendViaResend({ to, subject, html, text }) {
         'Authorization': 'Bearer ' + process.env.EMAIL_API_KEY,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ from: FROM(), to: [to], subject, html, text })
+      body: JSON.stringify(Object.assign({ from: FROM(), to: [to], subject, html, text }, replyTo ? { reply_to: replyTo } : {}))
     });
     const body = await res.text();
     if (!res.ok) throw new Error('Resend HTTP ' + res.status + ': ' + body.slice(0, 300));
@@ -67,7 +67,7 @@ async function sendViaResend({ to, subject, html, text }) {
 /* sendEmail({ to, subject, html, text }) -> { ok, dev? }
    Never throws for the "no provider configured" case (logs instead); does
    surface real provider errors so callers can decide how loud to be. */
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, replyTo }) {
   if (!configured()) {
     // Dev fallback — surface the action link prominently so flows are testable.
     const urlMatch = String(text || html || '').match(/https?:\/\/\S+/);
@@ -78,7 +78,7 @@ async function sendEmail({ to, subject, html, text }) {
     console.log('');
     return { ok: true, dev: true };
   }
-  if (provider() === 'resend') return sendViaResend({ to, subject, html, text });
+  if (provider() === 'resend') return sendViaResend({ to, subject, html, text, replyTo });
   throw new Error('Unknown EMAIL_PROVIDER: ' + provider());
 }
 
@@ -138,6 +138,52 @@ const templates = {
         footnote: 'This link expires in 1 hour and can be used once. If you didn’t request this, you can safely ignore this email — your password won’t change.'
       }),
       text: `${name ? 'Hi ' + name + ',' : 'Hi,'}\n\nReset your Claud password by opening this link (expires in 1 hour, single use):\n${href}\n\nIf you didn’t request this, ignore this email — your password won’t change.`
+    };
+  },
+  /* Internal notification for in-app bug reports & feature requests. No CTA
+     button — it's a plain message to the support inbox. The caller sets the
+     submitter as reply-to, so hitting "reply" reaches the user directly. */
+  feedback({ kind, severity, message, email, context }) {
+    const isBug = kind === 'bug';
+    const label = isBug ? 'Bug report' : 'Feature request';
+    const c = context || {};
+    const rows = [
+      ['Type', label],
+      isBug ? ['Severity', severity || 'Minor'] : null,
+      ['From', email || '(not provided)'],
+      c.url ? ['Screen', c.url] : null,
+      c.screen ? ['Viewport', c.screen] : null,
+      c.userId ? ['User ID', String(c.userId)] : null,
+      c.ua ? ['Browser', c.ua] : null,
+      ['Received', new Date().toISOString()]
+    ].filter(Boolean);
+    const accent = '#7e7a3c';
+    const metaHtml = rows.map((r) =>
+      `<tr><td style="padding:4px 14px 4px 0;color:#8c8074;font-size:13px;white-space:nowrap;vertical-align:top;">${ESC(r[0])}</td>` +
+      `<td style="padding:4px 0;color:#2b2520;font-size:13px;word-break:break-word;">${ESC(r[1])}</td></tr>`).join('');
+    const bodyHtml = ESC(message).replace(/\n/g, '<br>');
+    const html = `<!doctype html><html><body style="margin:0;background:#ece3d4;padding:32px 0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#2b2520;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+    <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#fbf5ec;border:1px solid #ddcfb8;border-radius:16px;overflow:hidden;">
+      <tr><td style="padding:24px 30px 6px;">
+        <div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:${accent};">${ESC(label)}</div>
+        <h1 style="margin:6px 0 0;font-size:19px;font-weight:700;letter-spacing:-0.02em;">ClaudBudget feedback</h1>
+      </td></tr>
+      <tr><td style="padding:10px 30px 0;">
+        <table role="presentation" cellpadding="0" cellspacing="0">${metaHtml}</table>
+      </td></tr>
+      <tr><td style="padding:16px 30px 26px;">
+        <div style="border-top:1px solid #e7dcc8;padding-top:16px;font-size:15px;line-height:1.6;color:#2b2520;">${bodyHtml}</div>
+      </td></tr>
+    </table>
+    <p style="margin:16px 0 0;font-size:11px;color:#8c8074;">Sent by ClaudBudget · reply to reach the sender</p>
+  </td></tr></table>
+</body></html>`;
+    const text = `${label} — ClaudBudget\n\n${rows.map((r) => r[0] + ': ' + r[1]).join('\n')}\n\n----\n${message}\n`;
+    return {
+      subject: label + (isBug && severity ? ' · ' + severity : '') + ' — ClaudBudget',
+      html: html,
+      text: text
     };
   }
 };
