@@ -413,19 +413,95 @@ function txStatementFlip(rows, isCreditCard) {
   return pos > neg;
 }
 
-/* ---- duplicate detection: same date + same |amount| as an existing txn ---- */
+/* ---- duplicate detection (client mirror of server/lib/dedup.js) ------------
+   Same balanced rule the server applies, so the preview the user sees matches
+   what the server will do: same |amount| (cents), within ±3 days, compatible
+   account, and a similar merchant name. Kept inline (no import) since this file
+   is loaded as a plain Babel/JSX script. */
 function txExistingTxns() {
   const d = window.ClaudData;
   return (d && Array.isArray(d.transactions)) ? d.transactions : [];
 }
-function txIsDuplicate(date, amt) {
-  if (!date || amt == null || isNaN(amt)) return false;
-  const cents = Math.round(Math.abs(amt) * 100);
-  return txExistingTxns().some((t) => {
+// Normalise a merchant name: reuse the existing cleaner first (handles dates,
+// processor prefixes, city/region), then lowercase + collapse like the server.
+function txNormName(raw) {
+  let s = txCleanMerchant(raw == null ? "" : raw);
+  s = String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  return s;
+}
+function txNameSimilar(a, b) {
+  const na = txNormName(a), nb = txNormName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 3 && nb.length >= 3 && (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1)) return true;
+  const sa = na.split(" ").filter(Boolean), sb = nb.split(" ").filter(Boolean);
+  if (!sa.length || !sb.length) return false;
+  const setB = new Set(sb); let inter = 0;
+  for (const t of sa) if (setB.has(t)) inter++;
+  const union = sa.length + sb.length - inter;
+  return union > 0 && (inter / union) >= 0.5;
+}
+function txSameCents(a, b) {
+  return Math.round(Math.abs(a) * 100) === Math.round(Math.abs(b) * 100);
+}
+function txWithinDays(d1, d2, days) {
+  if (days == null) days = 3;
+  const t1 = Date.parse(String(d1) + "T00:00:00"), t2 = Date.parse(String(d2) + "T00:00:00");
+  if (isNaN(t1) || isNaN(t2)) return false;
+  return Math.abs(t1 - t2) <= days * 86400000;
+}
+function txAccountOk(aId, bId) {
+  if (aId && bId) return aId === bId;
+  return true;
+}
+/* Return the existing transaction `incoming` duplicates (or null). `incoming`
+   is { date, amt, name, account_id }; account_id is optional. Balanced rule:
+   sameCents && withinDays(3) && accountOk && nameSimilar. */
+function txIsDuplicate(incoming) {
+  const date = incoming && incoming.date;
+  const amt = incoming && (incoming.amt != null ? incoming.amt : incoming.amount);
+  if (!date || amt == null || isNaN(amt)) return null;
+  const name = (incoming && incoming.name) || "";
+  const acctId = incoming && incoming.account_id;
+  const list = txExistingTxns();
+  for (const t of list) {
     const td = t.date || t.day;
     const ta = t.amt != null ? t.amt : t.amount;
-    return td === date && ta != null && Math.round(Math.abs(ta) * 100) === cents;
-  });
+    if (ta == null) continue;
+    if (!txSameCents(amt, ta)) continue;
+    if (!txWithinDays(date, td, 3)) continue;
+    if (!txAccountOk(acctId, t.account_id)) continue;
+    if (!txNameSimilar(name, t.name)) continue;
+    return t;
+  }
+  return null;
+}
+/* ---- recurring-lite (client advisory; the server re-derives authoritatively) -
+   Match an incoming outflow against the user's saved recurring rules so the
+   preview can show a green "recurring" badge and pre-fill its category/icon.
+   Mirrors server/lib/dedup.matchRecurring: name similar, magnitude within 1%
+   (min 1¢), compatible account, within ±5 days of next_date. */
+function txRecurringRules() {
+  const d = window.ClaudData;
+  return (d && Array.isArray(d.recurring)) ? d.recurring : [];
+}
+function txMatchRecurring(incoming) {
+  const amt = incoming && (incoming.amt != null ? incoming.amt : incoming.amount);
+  if (amt == null || isNaN(amt) || !(amt < 0)) return null;   // outflows only
+  const date = incoming && incoming.date;
+  const name = (incoming && incoming.name) || "";
+  const acctId = incoming && incoming.account_id;
+  const inAmt = Math.abs(amt);
+  for (const r of txRecurringRules()) {
+    if (!txNameSimilar(name, r.name)) continue;
+    const rAmt = Math.abs(Number(r.amount));
+    const tol = Math.max(0.01, rAmt * 0.01);
+    if (Math.abs(inAmt - rAmt) > tol) continue;
+    if (!txAccountOk(acctId, r.account_id)) continue;
+    if (r.next_date && date && !txWithinDays(date, r.next_date, 5)) continue;
+    return r;
+  }
+  return null;
 }
 
 /* ---- statement parsers: CSV / OFX-QFX / PDF ---- */
@@ -698,6 +774,7 @@ const txFmtAmt = (n) => {
   return (n < 0 ? "−$" : "+$") + v;
 };
 const TX_DUP_STYLE = { color: "var(--warn, #cf8a2c)", fontWeight: 600 };
+const TX_RECUR_STYLE = { color: "var(--green, #4f9a6a)", fontWeight: 600 };
 
 let txUid = 0;
 const txNextId = () => "imp" + (Date.now().toString(36)) + "_" + (txUid++);
@@ -724,16 +801,25 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
   }, [onClose]);
 
   const isCredit = txAcctIsCredit(acctObj(account));
+  // Resolve the selected account's id (when accounts arrived as rich objects) so
+  // the client dup/recurring checks are account-aware, matching the server.
+  const selAcctId = (function () { const a = acctObj(account); return a && a.id != null ? a.id : null; })();
 
   /* derive a preview row from a parsed transaction, given the chosen orientation */
   function txRowFrom(t, flip, id) {
     const amt = flip ? -t.amt : t.amt;
     const clean = txCleanMerchant(t.name);
     const r = txResolveCat(t.name, clean, amt, t.bankCat, t.bankMapped);
-    const dup = txIsDuplicate(t.date, amt);
+    const dup = txIsDuplicate({ date: t.date, amt, name: clean, account_id: selAcctId });
+    const recur = txMatchRecurring({ date: t.date, amt, name: clean, account_id: selAcctId });
+    // Recurring match (advisory): pre-fill its category/icon and treat it as a
+    // confident, expected charge. A duplicate still wins the "unchecked" default.
+    const cat = recur && recur.category ? recur.category : r.cat;
+    const icon = recur && recur.icon ? recur.icon : r.icon;
     return { id: id || txNextId(), name: clean, rawName: t.name, rawAmt: t.amt,
-             bankCat: t.bankCat, bankMapped: t.bankMapped, cat: r.cat, icon: r.icon,
-             confident: r.confident, amt, date: t.date, include: !dup, dup };
+             bankCat: t.bankCat, bankMapped: t.bankMapped, cat, icon,
+             confident: recur ? true : r.confident, amt, date: t.date,
+             include: !dup, dup, recur: recur ? recur.name : null };
   }
 
   /* ---- statement: parse the real file ---- */
@@ -767,11 +853,15 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
       const rows = s.rows.map((r) => {
         const amt = flip ? -r.rawAmt : r.rawAmt;
         const rr = txResolveCat(r.rawName, r.name, amt, r.bankCat, r.bankMapped);
-        return { ...r, amt, cat: rr.cat, icon: rr.icon, confident: rr.confident, dup: txIsDuplicate(r.date, amt) };
+        const dup = txIsDuplicate({ date: r.date, amt, name: r.name, account_id: selAcctId });
+        const recur = txMatchRecurring({ date: r.date, amt, name: r.name, account_id: selAcctId });
+        const cat = recur && recur.category ? recur.category : rr.cat;
+        const icon = recur && recur.icon ? recur.icon : rr.icon;
+        return { ...r, amt, cat, icon, confident: recur ? true : rr.confident, dup, recur: recur ? recur.name : null };
       });
       return { ...s, rows };
     });
-  }, [isCredit]);
+  }, [isCredit, selAcctId]);
 
   /* ---- receipts: read the photo with on-device OCR ---- */
   function readReceipts(files) {
@@ -840,12 +930,17 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
     if (isStmt) {
       items = stmtSel.map((r) => ({
         name: r.name, cat: r.cat, amt: r.amt, date: r.date, day: txDayLabel(r.date),
-        account, icon: r.icon,
-        // Only surface rows we're genuinely unsure about: an uncertain category or
-        // a possible duplicate. Confidently-categorised rows import without a flag.
-        review: (!r.confident) || r.dup,
-        reason: r.dup ? "Possible duplicate · same day & amount as an existing transaction"
-              : (!r.confident ? "Couldn’t confidently categorize · please confirm the category" : "")
+        account, account_id: selAcctId, icon: r.icon,
+        // A row only reaches stmtSel when it's checked. If it's ALSO a flagged
+        // duplicate, the user deliberately re-included it, so tell the server to
+        // skip its auto-skip for this row.
+        forceInclude: !!r.dup,
+        // Recurring rows are expected, known charges → not flagged. Otherwise
+        // surface uncertain categories / possible duplicates for review.
+        review: r.recur ? false : ((!r.confident) || !!r.dup),
+        reason: r.recur ? ("Linked to recurring: " + r.recur)
+              : (r.dup ? "Possible duplicate · same day & amount as an existing transaction"
+              : (!r.confident ? "Couldn’t confidently categorize · please confirm the category" : ""))
       }));
     } else {
       items = rcptReady.map((r) => {
@@ -863,6 +958,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
   function reset() { setStmt(null); setRcpts([]); }
 
   const dupCount = isStmt && stmt && stmt.status === "ready" ? stmt.rows.filter((r) => r.dup).length : 0;
+  const recurCount = isStmt && stmt && stmt.status === "ready" ? stmt.rows.filter((r) => r.recur).length : 0;
 
   return (
     <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -936,6 +1032,10 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                     <div className="imp-mode-hint" style={{ ...TX_DUP_STYLE, display: "block", margin: "2px 2px 8px" }}>
                       {"⚠ "}{dupCount} {dupCount === 1 ? "row looks like a transaction you already have" : "rows look like transactions you already have"} (same day &amp; amount) — unchecked by default.
                     </div>}
+                  {recurCount > 0 &&
+                    <div className="imp-mode-hint" style={{ ...TX_RECUR_STYLE, display: "block", margin: "2px 2px 8px" }}>
+                      {"↻ "}{recurCount} {recurCount === 1 ? "row matches a recurring bill" : "rows match recurring bills"} — categorized for you.
+                    </div>}
                   <div className="imp-detected">
                     {stmt.rows.map((r) =>
                       <label className={"imp-row" + (r.include ? "" : " off")} key={r.id}>
@@ -946,6 +1046,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
                           <span className="imp-row-name">{r.name}</span>
                           <span className="imp-row-meta">
                             {txDayLabel(r.date)} {"·"} {r.cat}
+                            {r.recur && <span style={TX_RECUR_STYLE}> {"·"} {"↻"} recurring · {r.recur}</span>}
                             {r.dup && <span style={TX_DUP_STYLE}> {"·"} {"⚠"} possible duplicate</span>}
                           </span>
                         </span>
@@ -971,7 +1072,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
               {rcpts.length > 0 &&
                 <div className="rcpt-cards">
                   {rcpts.map((r) => {
-                    const rDup = r.status === "ready" && r.amt ? txIsDuplicate(r.date, parseFloat(r.amt)) : false;
+                    const rDup = r.status === "ready" && r.amt ? txIsDuplicate({ date: r.date, amt: -Math.abs(parseFloat(r.amt) || 0), name: r.name, account_id: selAcctId }) : null;
                     return (
                     <div className="rcpt-card" key={r.id}>
                       <div className="rcpt-thumb">

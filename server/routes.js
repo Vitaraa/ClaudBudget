@@ -14,6 +14,7 @@ const quotes = require('./lib/quotes');
 const mailer = require('./lib/mailer');
 const ratelimit = require('./lib/ratelimit');
 const google = require('./lib/google');
+const { computeMatchKey, findDuplicate, isDuplicateOf, matchRecurring, maybeAdvanceRecurring } = require('./lib/dedup');
 
 const nowISO = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -65,6 +66,25 @@ function adjustAccountBalance(uid, acctId, delta) {
     .run(round2((a.balance || 0) + delta), acctId, uid);
 }
 
+/* Shared transaction INSERT. Writes every existing column PLUS the three dedup
+   columns (origin, match_key, recurring_id) and returns the new id. The wrapped
+   db encrypts the sensitive columns by name (model.js); origin/match_key/
+   recurring_id aren't in ENCRYPTED_FIELDS so they pass through as plaintext.
+   match_key is computed from the plaintext amount BEFORE this write. Callers
+   pass a normalized `t` ({ account_id, account_name, name, category, amount,
+   date, icon, review, reason, excluded }) and options for origin/recurringId.
+   Does NOT touch balances — callers own balance adjustment. */
+function insertTxn(uid, t, { origin = 'manual', recurringId = null } = {}) {
+  const id = newId('tx_');
+  const matchKey = computeMatchKey(t.account_id, t.amount, t.date);
+  db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,origin,match_key,recurring_id,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, uid, t.account_id || null, t.account_name || null, t.name, t.category || null, t.amount,
+    t.date, t.icon || null, bool(t.review), t.reason || null, bool(t.excluded),
+    origin, matchKey, recurringId, nowISO());
+  return id;
+}
+
 /* --------------------------------------------------------- row mappers */
 function txnRow(r) {
   if (!r) return r;
@@ -74,7 +94,8 @@ function txnRow(r) {
     date: r.date, day: r.date, icon: r.icon,
     review: !!r.review, reason: r.reason, excluded: !!r.excluded,
     note: r.note || '', tags: jparse(r.tags, []), splits: jparse(r.splits, []),
-    attachment: r.attachment || null, history: jparse(r.history, [])
+    attachment: r.attachment || null, history: jparse(r.history, []),
+    origin: r.origin, recurring_id: r.recurring_id
   };
 }
 function goalRow(g) {
@@ -453,7 +474,7 @@ function register(router) {
     ctx.json(200, { transactions: db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY date DESC, created_at DESC').all(ctx.user.id).map(txnRow) });
   }));
   router.post('/api/transactions', auth.requireAuth(async (req, res, ctx) => {
-    const b = ctx.body, uid = ctx.user.id, id = newId('tx_');
+    const b = ctx.body, uid = ctx.user.id;
     let acctName = str(b.account || b.account_name, 'account');
     let acctId = str(b.account_id, 'account_id');
     if (acctId) { const a = db.prepare('SELECT name FROM accounts WHERE id=? AND user_id=?').get(acctId, uid); if (a) acctName = a.name; }
@@ -462,13 +483,33 @@ function register(router) {
     const name = str(b.name, 'Name', { required: true });
     if (!cat) cat = applyRules(uid, name);     // auto-categorize from rules
     const amount = num(b.amt != null ? b.amt : b.amount, 'amount', { required: true });
-    db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      id, uid, acctId, acctName, name, cat, amount,
-      str(b.date || b.day, 'date') || today(), str(b.icon, 'icon'),
-      bool(b.review), str(b.reason, 'reason'), bool(b.excluded), nowISO());
-    adjustAccountBalance(uid, acctId, amount);   // running balance follows the new transaction
-    ctx.json(200, { transaction: txnRow(ownedRow('transactions', id, uid)) });
+    const date = str(b.date || b.day, 'date') || today();
+    let icon = str(b.icon, 'icon');
+    let review = bool(b.review);
+    let reason = str(b.reason, 'reason');
+    const incoming = { account_id: acctId, amount, name, date };
+
+    // Recurring: if this charge matches a saved recurring rule and the user gave
+    // no category, inherit the rule's category/icon and link the row to it.
+    let recurringId = null;
+    const recur = matchRecurring(db, uid, incoming);
+    if (recur) {
+      recurringId = recur.id;
+      if (!cat && recur.category) cat = recur.category;
+      if (!icon && recur.icon) icon = recur.icon;
+    }
+
+    // Duplicate: a manual add is never silently dropped — we STILL insert it, but
+    // flag it for review so the user can confirm or delete.
+    const dup = findDuplicate(db, uid, incoming);
+    if (dup) {
+      review = 1;
+      reason = 'Possible duplicate of an existing transaction';
+    }
+
+    const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, category: cat, amount, date, icon, review, reason, excluded: bool(b.excluded) }, { origin: 'manual', recurringId });
+    adjustAccountBalance(uid, acctId, amount);   // running balance follows the new transaction (always)
+    ctx.json(200, { transaction: txnRow(ownedRow('transactions', id, uid)), duplicateOf: dup ? dup.id : null, recurringId });
   }));
   router.put('/api/transactions/:id', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id; const row = ownedRow('transactions', ctx.params.id, uid); const b = ctx.body;
@@ -530,28 +571,61 @@ function register(router) {
   }));
   router.post('/api/transactions/import', auth.requireAuth(async (req, res, ctx) => {
     const uid = ctx.user.id; const items = Array.isArray(ctx.body.items) ? ctx.body.items : [];
-    const created = [];
-    const balDeltas = {};   // acctId -> net amount imported, applied to balances after the loop
+    const created = [];           // ids actually inserted
+    const skipped = [];           // auto-skipped duplicates (not inserted)
+    let linkedCount = 0;          // rows linked to a recurring rule
+    const balDeltas = {};         // acctId -> net amount imported, applied after the loop
+    const batch = [];             // this-import's accepted incomings, for in-batch dup detection
     tx(() => {
       for (const b of items) {
-        const id = newId('tx_');
         let acctName = str(b.account || b.account_name, 'account');
         let acctId = null;
         if (acctName) { const a = findAccountByName(uid, acctName); if (a) acctId = a.id; }
         const name = str(b.name, 'Name', { required: true });
-        let cat = str(b.cat || b.category, 'category') || applyRules(uid, name);
         const amount = num(b.amt != null ? b.amt : b.amount, 'amount', { required: true });
-        db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-          id, uid, acctId, acctName, name, cat, amount,
-          str(b.date || b.day, 'date') || today(), str(b.icon, 'icon'),
-          bool(b.review != null ? b.review : true), str(b.reason, 'reason') || 'Imported — confirm the category', 0, nowISO());
+        const date = str(b.date || b.day, 'date') || today();
+        const incoming = { account_id: acctId, amount, name, date };
+        const forced = bool(b.forceInclude);
+
+        // (1) Same statement imported twice, or two identical lines in one file:
+        // check against rows we've already accepted in THIS batch (same sign).
+        const inBatch = !forced && batch.some((p) => isDuplicateOf(incoming, p, { sameSign: true }));
+        // (2) Already in the user's history? (skip the DB scan if already a batch dup)
+        const dup = (!forced && !inBatch) ? findDuplicate(db, uid, incoming) : null;
+        if (!forced && (inBatch || dup)) {
+          // AUTO-SKIP: don't insert, don't move the balance. The user can re-run
+          // with forceInclude for a row they actually want.
+          skipped.push({ name, amount, date, duplicateOf: dup ? dup.id : null,
+            reason: inBatch ? 'Duplicate of another row in this import' : 'Already in your transactions' });
+          continue;
+        }
+
+        // (3) Recurring + categorisation. Recurring inherits category/icon and
+        // clears the review flag (it's a known, expected charge).
+        const recur = matchRecurring(db, uid, incoming);
+        let cat = str(b.cat || b.category, 'category') || (recur && recur.category) || applyRules(uid, name);
+        const icon = str(b.icon, 'icon') || (recur && recur.icon) || null;
+        const review = recur ? 0 : bool(b.review != null ? b.review : true);
+        const reason = recur ? `Linked to recurring: ${recur.name}`
+                             : (str(b.reason, 'reason') || 'Imported — confirm the category');
+
+        const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, category: cat, amount, date, icon, review, reason, excluded: false },
+          { origin: 'import', recurringId: recur ? recur.id : null });
+        if (recur) { linkedCount++; maybeAdvanceRecurring(db, uid, recur, date); }
         if (acctId) balDeltas[acctId] = (balDeltas[acctId] || 0) + amount;   // imported money moves the balance
+        batch.push(incoming);     // future rows in this batch dedupe against it
         created.push(id);
       }
       for (const aid in balDeltas) adjustAccountBalance(uid, aid, balDeltas[aid]);
     });
-    ctx.json(200, { ok: true, count: created.length, transactions: created.map((id) => txnRow(db.prepare('SELECT * FROM transactions WHERE id=?').get(id))) });
+    ctx.json(200, {
+      ok: true,
+      count: created.length,
+      skippedCount: skipped.length,
+      linkedCount,
+      skipped,
+      transactions: created.map((id) => txnRow(db.prepare('SELECT * FROM transactions WHERE id=?').get(id)))
+    });
   }));
 
   /* --------------------------------------------------------- RULES */

@@ -207,6 +207,22 @@ addColumn("ALTER TABLE users ADD COLUMN google_sub     TEXT");
 // stays queryable, exactly like transactions.account_id.
 addColumn("ALTER TABLE holdings ADD COLUMN account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL");
 
+/* Duplicate-detection columns on transactions (all plaintext so they stay
+   queryable/indexable, like account_id/date). `origin` records how a row got in
+   ('manual' | 'import'); NOT NULL DEFAULT 'manual' backfills every existing row
+   automatically. `match_key` is a sign-preserving (account|cents|date)
+   fingerprint used to narrow duplicate candidates (see lib/dedup.js).
+   `recurring_id` links an imported charge to the recurring rule it satisfied.
+   No new flag is added — possible-duplicate state reuses review/reason. */
+addColumn("ALTER TABLE transactions ADD COLUMN origin       TEXT NOT NULL DEFAULT 'manual'");
+addColumn("ALTER TABLE transactions ADD COLUMN match_key    TEXT");
+addColumn("ALTER TABLE transactions ADD COLUMN recurring_id TEXT");
+// Index for match_key lookups. Created HERE (not in the CREATE TABLE block
+// above) because match_key is added by the ALTER just above — on a fresh DB the
+// column doesn't exist while the schema block runs. Idempotent; idx_txn_user_date
+// stays as defined above.
+addColumn("CREATE INDEX IF NOT EXISTS idx_txn_match ON transactions(user_id, match_key)");
+
 /* ---- At-rest encryption -------------------------------------------------
    Wrap the raw DB so sensitive columns are encrypted on write and decrypted
    on read (see lib/model.js + lib/crypto.js), then encrypt any pre-existing
@@ -221,6 +237,29 @@ rawDb.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)')
   if (row && row.value === '1') return;             // already migrated
   migrateEncryption(rawDb);
   rawDb.prepare("INSERT INTO meta (key, value) VALUES ('enc_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+})();
+
+/* ---- Duplicate-detection backfill ---------------------------------------
+   One-time, idempotent: compute match_key for every pre-existing transaction
+   that doesn't have one. Guarded by a meta flag (mirrors enc_version above) so
+   it runs once. Uses rawDb directly and decrypts the stored amount with
+   crypto.dec — the amount column is ciphertext at rest, and match_key is built
+   from the SIGNED cents, so we must read the real number. Runs AFTER the
+   encryption block so dec() sees ciphertext (or harmlessly passes plaintext
+   through on a brand-new/never-encrypted row). */
+(function ensureDedupKeys() {
+  const row = rawDb.prepare("SELECT value FROM meta WHERE key = 'dedup_version'").get();
+  if (row && row.value === '1') return;                       // already backfilled
+  const { dec } = require('./crypto');
+  const { computeMatchKey } = require('./dedup');
+  const rows = rawDb.prepare('SELECT id, account_id, amount, date FROM transactions WHERE match_key IS NULL').all();
+  const upd = rawDb.prepare('UPDATE transactions SET match_key = ? WHERE id = ?');
+  for (const r of rows) {
+    const amt = Number(dec(r.amount));
+    if (!Number.isFinite(amt)) continue;                      // skip an unreadable row rather than crash boot
+    upd.run(computeMatchKey(r.account_id, amt, r.date), r.id);
+  }
+  rawDb.prepare("INSERT INTO meta (key, value) VALUES ('dedup_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
 })();
 
 // Manual transaction helper. node:sqlite's DatabaseSync has no .transaction()

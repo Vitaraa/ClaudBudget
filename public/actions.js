@@ -27,7 +27,7 @@
     };
   }
   function mapTxn(x) {
-    return {
+    var t = {
       name: x.name,
       category: x.cat != null ? x.cat : x.category,
       amount: x.amt != null ? x.amt : x.amount,
@@ -35,6 +35,12 @@
       date: x.date || x.day, icon: x.icon,
       review: x.review, reason: x.reason
     };
+    // Pass through the account id (lets the server scope dedup/recurring to the
+    // right account) and forceInclude (user re-included a flagged duplicate).
+    // `origin` is deliberately NOT forwarded — the server assigns it.
+    if (x.account_id !== undefined) t.account_id = x.account_id;
+    if (x.forceInclude !== undefined) t.forceInclude = x.forceInclude;
+    return t;
   }
   function mapHolding(h) {
     // account_id links the holding to an investment account; '' / null clears it.
@@ -67,7 +73,14 @@
     removeTxn: function (id) { return API.del('/api/transactions/' + id).then(done).catch(fail); },
     recatTxn: function (id, cat) { return API.put('/api/transactions/' + id, { category: cat, review: false }).then(done).catch(fail); },
     setTxnIcon: function (id, icon) { return API.put('/api/transactions/' + id, { icon: icon }).then(done).catch(fail); },
-    importTxns: function (items) { return API.post('/api/transactions/import', { items: (items || []).map(mapTxn) }).then(done).catch(fail); },
+    importTxns: function (items) {
+      // Keep the server response (count / skippedCount / linkedCount / skipped)
+      // so the caller can surface "Imported N · skipped M · linked K", then
+      // refresh the store and resolve to that response.
+      return API.post('/api/transactions/import', { items: (items || []).map(mapTxn) })
+        .then(function (res) { return done().then(function () { return res; }); })
+        .catch(fail);
+    },
     bulkTxn: function (ids, action, category) { return API.post('/api/transactions/bulk', { ids: ids, action: action, category: category }).then(done).catch(fail); },
 
     // rules

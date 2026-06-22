@@ -2311,6 +2311,72 @@ function FirstRunSetup({ onClose }) {
     </div>);
 }
 
+/* ---------------------------------- Dashboard accounts picker ----
+   Lets the user choose WHICH accounts appear in the Dashboard "Accounts"
+   widget (at most 5). Persists as settings.dashboardAccounts (array of ids).
+   Reuses the settings-modal shell + the import checkbox-row styling. */
+const DASH_ACCT_CAP = 5;
+function DashAccountsPicker({ accounts, selectedIds, valueOf, onClose, onSave }) {
+  // Local working set of chosen ids; seeded from the current selection.
+  const [sel, setSel] = useState(() => (selectedIds || []).filter((id) => id != null).slice(0, DASH_ACCT_CAP));
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  // Offer accounts highest-value first so the meaningful ones are easy to find.
+  const ordered = [...accounts].sort((a, b) => valueOf(b) - valueOf(a));
+  const atCap = sel.length >= DASH_ACCT_CAP;
+  const toggle = (id) => {
+    if (id == null) return;
+    setSel((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= DASH_ACCT_CAP) return prev;        // never exceed the cap
+      return [...prev, id];
+    });
+  };
+  // Save in the offered (value) order so the widget shows them top-down by value.
+  const save = () => onSave(ordered.filter((a) => sel.includes(a.id)).map((a) => a.id));
+
+  return (
+    <div className="set-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="set-modal dash-pick-modal" role="dialog" aria-modal="true" aria-label="Choose dashboard accounts">
+        <div className="set-head">
+          <h2>Dashboard accounts</h2>
+          <button className="set-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+        <div className="dash-pick-body">
+          <p className="dash-pick-note">
+            Pick up to {DASH_ACCT_CAP} accounts to feature on your dashboard. Leave all unchecked to show the top {DASH_ACCT_CAP} by value.
+          </p>
+          <div className="imp-detected">
+            {ordered.map((a) => {
+              const id = a.id;
+              const on = id != null && sel.includes(id);
+              const disabled = id == null || (!on && atCap);
+              return (
+                <label className={"imp-row" + (disabled && !on ? " off" : "")} key={id != null ? id : a.name}
+                  title={disabled && !on ? "Pick at most " + DASH_ACCT_CAP : undefined}>
+                  <input type="checkbox" checked={on} disabled={disabled} onChange={() => toggle(id)} />
+                  <span className="imp-row-ico"><Icon name={a.icon} /></span>
+                  <div className="imp-row-main">
+                    <span className="imp-row-name">{a.name}</span>
+                    <span className="imp-row-meta">{a.type}{a.inst ? " · " + a.inst : ""}</span>
+                  </div>
+                  <span className={"imp-row-amt" + (valueOf(a) < 0 ? "" : " pos")}>{money(valueOf(a), 2)}</span>
+                </label>);
+            })}
+          </div>
+        </div>
+        <div className="set-foot">
+          <span className="set-note">{sel.length} of {DASH_ACCT_CAP} selected</span>
+          {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
+          {Button && <Button variant="primary" size="sm" onClick={save}>Save</Button>}
+        </div>
+      </div>
+    </div>);
+}
+
 function App() {
   useClaudData();
   useEffect(() => { if (!ClaudData.ready) ClaudStore.hydrate(); }, []);
@@ -2348,6 +2414,8 @@ function App() {
   const [notifSeen, setNotifSeen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [cycleStart, setCycleStart] = useState(1); // day of month the reporting cycle starts on
+
+  const [dashPickerOpen, setDashPickerOpen] = useState(false);   // "Manage" picker for the Dashboard Accounts widget
 
   // accounts available to attach a transaction to — full objects (carry mask/type
   // for import auto-detection) and a names-only list for the simpler pickers
@@ -2458,6 +2526,30 @@ function App() {
   const spentTotal = (_dash.budget && _dash.budget.totalSpent) || 0;
   const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   const isPro = !!(ClaudData.user && ClaudData.user.plan === "pro");
+
+  // ---- Dashboard "Accounts" widget: show AT MOST 5, cleanly ----
+  // An account's headline value (investment accounts add their securities via the
+  // store's accountValue helper; cash/credit accounts just use their balance).
+  const dashAcctVal = (a) => {
+    const ST = window.ClaudStore;
+    return (ST && ST.accountValue) ? ST.accountValue(a).total : (a.bal != null ? a.bal : (a.balance || 0));
+  };
+  // Live, undeleted accounts (same source the rest of the dashboard uses).
+  const dashAllAccts = ACCOUNTS.filter((a) => !deletedAccts.includes(a.name));
+  // Top accounts by value — the default when the user hasn't pinned a custom set.
+  const dashTopAccts = [...dashAllAccts].sort((a, b) => dashAcctVal(b) - dashAcctVal(a)).slice(0, DASH_ACCT_CAP);
+  // The user's saved selection (array of account ids), if any: keep only ids that
+  // still exist, preserve the saved order, and never show more than the cap.
+  const dashPinnedIds = Array.isArray((ClaudData.settings || {}).dashboardAccounts) ? ClaudData.settings.dashboardAccounts : [];
+  const dashPinnedAccts = dashPinnedIds
+    .map((id) => dashAllAccts.find((a) => a.id === id))
+    .filter(Boolean)
+    .slice(0, DASH_ACCT_CAP);
+  // Empty/unset selection (or every saved id now gone) → fall back to the top set.
+  // Final clamp on the render path guarantees the widget can NEVER show more than
+  // DASH_ACCT_CAP — defends against legacy/over-cap state regardless of source.
+  const dashAccounts = (dashPinnedAccts.length ? dashPinnedAccts : dashTopAccts).slice(0, DASH_ACCT_CAP);
+  const dashHiddenCount = Math.max(0, dashAllAccts.length - dashAccounts.length);
 
   const { Segmented } = DS;
 
@@ -2718,26 +2810,38 @@ function App() {
                   </div>
                 </Card>
 
-                {/* Accounts */}
+                {/* Accounts — at most 5; the user picks which via "Manage" */}
                 <Card widget className="span6">
                   <div className="widget-head">
                     <span className="widget-title">Accounts</span>
-                    <span className="muted">{ACCOUNTS.length} connected</span>
+                    <span className="acct-head-right">
+                      <span className="muted">
+                        {dashAllAccts.length} connected{dashHiddenCount > 0 ? " · +" + dashHiddenCount + " more" : ""}
+                      </span>
+                      {dashAllAccts.length > DASH_ACCT_CAP &&
+                        <button type="button" className="acct-manage" onClick={() => setDashPickerOpen(true)}>
+                          <Icon name="sliders" />Manage
+                        </button>}
+                    </span>
                   </div>
-                  <div className="acct-grid">
-                    {ACCOUNTS.map((a) =>
-                  <div className="acct" key={a.name}>
+                  {dashAccounts.length === 0 ?
+                  <div className="acct-grid-empty">No accounts connected yet.</div> :
+                  <div className="acct-grid" data-count={dashAccounts.length}>
+                    {dashAccounts.map((a) => {
+                    const bal = dashAcctVal(a);
+                    return (
+                      <div className="acct" key={a.id != null ? a.id : a.name}>
                         <div className="acct-head">
                           <span className="acct-ico"><Icon name={a.icon} /></span>
-                          <div>
+                          <div className="acct-head-text">
                             <div className="acct-type">{a.type}</div>
                             <div className="acct-name">{a.name}</div>
                           </div>
                         </div>
-                        <span className={"acct-bal " + (a.bal < 0 ? "neg" : "")}>{money(a.bal, 2)}</span>
-                      </div>
-                  )}
-                  </div>
+                        <span className={"acct-bal " + (bal < 0 ? "neg" : "")}>{money(bal, 2)}</span>
+                      </div>);
+                  })}
+                  </div>}
                 </Card>
               </div>
             </React.Fragment> :
@@ -2812,11 +2916,34 @@ function App() {
       {/* ---- Add account ---- */}
       {addOpen && <AddAccountModal onClose={() => setAddOpen(false)} onAdd={(a) => { ClaudActions.addAccount(a); setAddOpen(false); }} />}
 
+      {/* ---- Dashboard accounts picker ("Manage") ---- */}
+      {dashPickerOpen &&
+        <DashAccountsPicker
+          accounts={dashAllAccts}
+          selectedIds={dashAccounts.map((a) => a.id).filter((id) => id != null)}
+          valueOf={dashAcctVal}
+          onClose={() => setDashPickerOpen(false)}
+          onSave={(ids) => { if (window.ClaudActions) ClaudActions.saveSettings({ dashboardAccounts: ids }); setDashPickerOpen(false); }} />}
+
       {/* ---- Add transaction ---- */}
       {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} />}
 
       {/* ---- Import statements / receipts ---- */}
-      {importOpen && <ImportModal accounts={cashAcctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => { ClaudActions.importTxns(items); setImportOpen(null); }} />}
+      {importOpen && <ImportModal accounts={cashAcctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => {
+        ClaudActions.importTxns(items).then(function (res) {
+          // Surface what the server did when it skipped duplicates or linked
+          // recurring bills (silent on the plain "everything imported" path).
+          if (!res) return;
+          var sk = res.skippedCount || 0, lk = res.linkedCount || 0;
+          if (sk || lk) {
+            var parts = ["Imported " + (res.count || 0)];
+            if (sk) parts.push("skipped " + sk + " duplicate" + (sk === 1 ? "" : "s"));
+            if (lk) parts.push("linked " + lk + " recurring");
+            try { alert(parts.join(" · ")); } catch (e) {}
+          }
+        });
+        setImportOpen(null);
+      }} />}
 
       {/* ---- Add / edit investment ---- */}
       {invModal && <InvestmentModal modal={invModal} onClose={() => setInvModal(null)} onSave={saveHolding} onDelete={(id) => { setInvModal(null); setInvDelete(holdings.find((x) => x.id === id) || null); }} />}

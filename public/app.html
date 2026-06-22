@@ -471,16 +471,36 @@
   .goal-fig b { color: var(--text); font-weight: 700; }
 
   /* ---- Accounts ---- */
-  .acct-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; }
-  .acct { display: flex; flex-direction: column; gap: 9px; padding: 4px 18px; border-right: 1px solid var(--border); }
+  /* At most 5 accounts, laid out in a SINGLE row that never wraps. Using
+     auto-flow columns (one track per item) keeps the row clean whether there
+     are 1 or 5 accounts; min-width:0 + ellipsis stop long names overflowing. */
+  .acct-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
+  .acct { display: flex; flex-direction: column; gap: 9px; min-width: 0; padding: 4px 18px; border-right: 1px solid var(--border); }
   .acct:last-child { border-right: none; }
   .acct:first-child { padding-left: 2px; }
-  .acct-head { display: flex; align-items: center; gap: 9px; }
-  .acct-ico { width: 32px; height: 32px; border-radius: 9px; background: var(--input-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+  .acct-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .acct-head-text { min-width: 0; }
+  .acct-ico { width: 32px; height: 32px; border-radius: 9px; background: var(--input-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .acct-ico svg { width: 18px; height: 18px; }
-  .acct-type { font-size: var(--text-2xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--tracking-wide); }
-  .acct-name { font-size: var(--text-sm); font-weight: 600; }
+  .acct-type { font-size: var(--text-2xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--tracking-wide); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-name { font-size: var(--text-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .acct-bal { font-size: 1.15rem; font-weight: 700; letter-spacing: var(--tracking-tight); font-variant-numeric: tabular-nums; }
+  .acct-grid-empty { font-size: var(--text-sm); color: var(--muted); padding: 6px 2px; }
+  /* widget-head right cluster: "N connected · +N more" + the Manage button */
+  .acct-head-right { display: inline-flex; align-items: center; gap: 12px; }
+  .acct-manage { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer;
+    color: var(--accent); font-family: inherit; font-size: var(--text-xs); font-weight: 600; padding: 4px 8px;
+    border-radius: var(--radius-sm); transition: background var(--dur-fast), color var(--dur-fast); }
+  .acct-manage svg { width: 15px; height: 15px; }
+  .acct-manage:hover { background: var(--accent-soft); }
+  .acct-manage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Dashboard accounts picker (reuses .set-modal / .imp-row shells) */
+  .dash-pick-modal { max-width: 460px; }
+  .dash-pick-body { padding: 8px 24px 14px; overflow-y: auto; min-height: 0; }
+  .dash-pick-note { font-size: var(--text-xs); color: var(--muted); line-height: 1.5; text-wrap: pretty; margin: 4px 0 10px; }
+  .dash-pick-modal .imp-row { cursor: pointer; }
+  .dash-pick-modal .imp-row input[type=checkbox]:disabled { cursor: not-allowed; }
 
   /* ============================================================
      ACCOUNTS PAGE
@@ -791,7 +811,7 @@
     .dash-grid { grid-template-columns: repeat(2, 1fr); }
     .span2, .span3, .span4, .span6 { grid-column: span 2; }
     .kpi-row { grid-template-columns: repeat(2, 1fr); }
-    .acct-grid { grid-template-columns: repeat(2, 1fr); }
+    .acct-grid { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: repeat(2, 1fr); }
     .acct { border-right: none; border-bottom: 1px solid var(--border); padding: 14px 4px; }
   }
 
@@ -1179,7 +1199,7 @@
     .span2, .span3, .span4, .span6 { grid-column: span 1; }
     .kpi-row { grid-template-columns: 1fr 1fr; gap: 12px; }
     .kpi-3 { grid-template-columns: 1fr 1fr; gap: 12px; }
-    .acct-grid { grid-template-columns: 1fr 1fr; }
+    .acct-grid { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: 1fr 1fr; }
 
     /* sheet-style modals docked to the bottom of the screen */
     .set-overlay, .rcpt-overlay { padding: 0; align-items: flex-end; }
@@ -1197,7 +1217,7 @@
 
   @media (max-width: 380px) {
     .kpi-row, .kpi-3 { grid-template-columns: 1fr; }
-    .acct-grid { grid-template-columns: 1fr; }
+    .acct-grid { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: 1fr; }
   }
 </style>
 
