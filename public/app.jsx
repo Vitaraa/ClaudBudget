@@ -383,6 +383,33 @@ function loadHoldsOpen() {
 }
 function saveHoldsOpen(map) { try { localStorage.setItem(HOLDS_OPEN_KEY, JSON.stringify(map)); } catch (e) {} }
 
+/* Unrealized $ gain vs cost basis over an investment account's non-cash
+   holdings, from LIVE values. Mirrors accounts.jsx acCostBasisReturn /
+   investments.jsx invCostBasisReturn exactly so the account row, the detail
+   page, and the Investments tab all report the same Total return. Holdings
+   with no recorded cost are skipped (their value would distort an unknown
+   basis); the cost side is FX-adjusted to match h.value's display currency. */
+function acctCostReturn(holdings) {
+  let cost = 0, value = 0;
+  for (const h of holdings || []) {
+    const isCash = h.cls === "Cash" || h.kind === "cash" || String(h.ticker).toUpperCase() === "CASH";
+    if (isCash) continue;
+    if (h.shares == null || h.cost == null || !(h.shares * h.cost > 0)) continue;
+    cost += h.shares * h.cost * (h.fxRate || 1);
+    value += (Number(h.value) || 0);
+  }
+  const gain = value - cost;
+  return { gain: gain, pct: cost > 0 ? gain / cost * 100 : 0, hasCost: cost > 0 };
+}
+/* Eased 8-point sparkline ending at `bal`, having risen/fallen by `chg` — the
+   same smoothstep shape as the store's trendFor, reused here so an investment
+   row's line reflects its total-return delta instead of cash movement. */
+function sparkFromDelta(bal, chg) {
+  const start = bal - chg, out = [];
+  for (let i = 0; i < 8; i++) { const f = i / 7; out.push(start + (bal - start) * (f * f * (3 - 2 * f))); }
+  return out;
+}
+
 /* ============================================================
    ACCOUNTS PAGE
    ============================================================ */
@@ -510,6 +537,16 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
                 const val = isInv ? ST.accountValue(a) : null;
                 const dispBal = isInv ? val.total : a.bal;        // total includes securities for display only
                 const holds = isInv ? ((ST.holdingsForAccount && ST.holdingsForAccount(a.id)) || []) : [];
+                // Investment rows: change + sparkline track LIVE total return vs cost
+                // basis (acctCostReturn over h.value/h.cost), NOT cash-transaction
+                // movement — so a TFSA reflects how its holdings moved, not its
+                // (usually empty) monthly cash flow. Cash/credit rows keep a.chg/a.trend.
+                const cb = isInv ? acctCostReturn(holds) : null;
+                const rowChg = isInv ? cb.gain : a.chg;
+                const rowTrend = isInv ? sparkFromDelta(dispBal, cb.gain) : a.trend;
+                // No cost basis recorded -> can't compute return; mirror the
+                // Investments tab and show a muted "—" rather than a stale "+$0".
+                const invNoCost = isInv && !cb.hasCost;
                 const dragging = drag && drag.group === g.label && drag.name === a.name;
                 const hkey = String(a.id != null ? a.id : a.name);
                 const holdsShown = holds.length > 0 && !!holdsOpen[hkey];
@@ -531,10 +568,10 @@ function AccountsPage({ onOpen, deleted = [], added = [], iconOv = {}, onSetIcon
                     <span className="acct-row-name">{a.name}{a.apy && <span className="apy-tag">{a.apy}</span>}</span>
                     <span className="acct-row-meta">{a.inst} {"\u00B7\u00B7\u00B7\u00B7"} {a.mask}</span>
                   </div>
-                  <Sparkline data={a.trend} />
+                  <Sparkline data={rowTrend} />
                   <div className="acct-row-right">
                     <span className={"acct-row-bal " + (dispBal < 0 ? "neg" : "")}>{money(dispBal, 2)}</span>
-                    <span className={"acct-row-chg " + (a.chg >= 0 ? "pos" : "neg")}>{signed(a.chg, 0)}</span>
+                    <span className={"acct-row-chg " + (invNoCost ? "" : (rowChg >= 0 ? "pos" : "neg"))} style={invNoCost ? { color: "var(--muted)" } : undefined}>{invNoCost ? "—" : signed(rowChg, 0)}</span>
                   </div>
                   <span className="acct-chev"><Icon name="chevR" /></span>
                 </div>
