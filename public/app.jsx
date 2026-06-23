@@ -2538,6 +2538,7 @@ function App() {
   const [catOverrides, setCatOverrides] = useState({});
   const [iconOverrides, setIconOverrides] = useState({});
   const [addTxnOpen, setAddTxnOpen] = useState(false);
+  const [addTxnAccount, setAddTxnAccount] = useState(null);   // account name to pre-lock when adding from an account page
   const [importOpen, setImportOpen] = useState(null);
   const [recatReq, setRecatReq] = useState(null);   // retroactive-category scope prompt
   // investments
@@ -2817,7 +2818,9 @@ function App() {
                     </button>}
                   {notifOpen && <InsightsFeed onClose={() => setNotifOpen(false)} onOpenReview={() => setReviewOpen(true)} placement={t.insightsPlacement} />}
                 </div>}
-              {!openAcct && !openHolding && PAGE_ACTION[tab] && Button && <Button variant="primary" size="sm" onClick={() => { if (tab === "Accounts") setAddOpen(true); else if (tab === "Transactions") setAddTxnOpen(true); else if (tab === "Budget") window.dispatchEvent(new CustomEvent("claud:add-budget")); else if (tab === "Goals") window.dispatchEvent(new CustomEvent("claud:add-goal")); else if (tab === "Investments") setInvModal({ mode: "add" }); }}>+ {PAGE_ACTION[tab]}</Button>}
+              {!openAcct && !openHolding && PAGE_ACTION[tab] && Button && <Button variant="primary" size="sm" onClick={() => { if (tab === "Accounts") setAddOpen(true); else if (tab === "Transactions") { setAddTxnAccount(null); setAddTxnOpen(true); } else if (tab === "Budget") window.dispatchEvent(new CustomEvent("claud:add-budget")); else if (tab === "Goals") window.dispatchEvent(new CustomEvent("claud:add-goal")); else if (tab === "Investments") setInvModal({ mode: "add" }); }}>+ {PAGE_ACTION[tab]}</Button>}
+              {/* On a cash/credit account's own page, add a transaction (or transfer) here, pre-scoped to this account. */}
+              {openAcct && !openHolding && !openAcctHolding && Button && !isInvAcct(openAcct) && <Button variant="primary" size="sm" onClick={() => { setAddTxnAccount(openAcct.name); setAddTxnOpen(true); }}>+ Add transaction</Button>}
               {/* On an investment account's own page, buy/track a position here (pre-targeted to this account); selling/editing lives in the Investments tab. */}
               {openAcct && !openHolding && !openAcctHolding && Button && isInvAcct(openAcct) && <Button variant="primary" size="sm" onClick={() => setInvModal({ mode: "add", accountId: openAcct.id })}>+ Add investment</Button>}
             </div>
@@ -3071,7 +3074,7 @@ function App() {
         onChoose={(scope) => { if (window.ClaudActions && ClaudActions.recategorize) ClaudActions.recategorize(recatReq.id, recatReq.cat, scope); setRecatReq(null); }} />}
 
       {/* ---- Add transaction ---- */}
-      {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} onTransfer={(p) => { ClaudActions.transfer(p); setAddTxnOpen(false); }} />}
+      {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} lockedAccount={addTxnAccount} onClose={() => { setAddTxnOpen(false); setAddTxnAccount(null); }} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); setAddTxnAccount(null); }} onTransfer={(p) => { ClaudActions.transfer(p); setAddTxnOpen(false); setAddTxnAccount(null); }} />}
 
       {/* ---- Import statements / receipts ---- */}
       {importOpen && <ImportModal accounts={cashAcctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => {

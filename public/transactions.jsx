@@ -183,7 +183,7 @@ function AddTransactionModal({ accounts = [], onClose, onAdd, onTransfer, locked
         <div className="fs-modal-foot">
           <div className="right">
             {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
-            {Button && <Button variant="primary" size="sm" onClick={submit}>{isTransfer ? "Transfer" : "Add transaction"}</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={submit}>Add transaction</Button>}
           </div>
         </div>
       </div>

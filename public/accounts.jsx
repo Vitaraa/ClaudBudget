@@ -347,20 +347,10 @@ function AccountDetailPage({ acct, onDelete, onSell, onOpenHolding }) {
   const [edit, setEdit] = acUseState(false);
   const [openTxnId, setOpenTxnId] = acUseState(null);
   const [viewRcpt, setViewRcpt] = acUseState(null);
-  const [addOpen, setAddOpen] = acUseState(false);   // in-account "Add transaction" modal
 
   const extra = ACCT_EXTRA[acct.name] || { kind: "checking", txns: [], meta: [], stat: null };
   const isCredit = extra.kind === "credit" || acct.group === "Credit" || acct.group_label === "Credit";
   const isInvestment = !!(window.ClaudStore && ClaudStore.isInvestmentAccount && ClaudStore.isInvestmentAccount(acct));
-  // Cash/credit accounts a transaction (or transfer) can attach to — investment
-  // accounts hold securities, not ordinary cash transactions, so they're excluded
-  // (matches the Add-transaction/Import pickers on the Transactions tab).
-  const cashAcctNames = (data.accounts || [])
-    .filter((a) => !(window.ClaudStore && ClaudStore.isInvestmentAccount && ClaudStore.isInvestmentAccount(a)))
-    .map((a) => a.name);
-  // The in-place add button only makes sense on a cash/credit account (you add
-  // securities to an investment account from the Investments tab / its holdings).
-  const canAddHere = !isInvestment && !!window.AddTransactionModal;
   const acctHoldings = isInvestment ? (data.holdings || []).filter((hh) => hh.account_id === acct.id) : [];
   // Investment account total = cash sleeve (acct.bal) + live value of its securities.
   const securities = isInvestment ? Math.round(acctHoldings.reduce((s, hh) => s + (Number(hh.value) || 0), 0) * 100) / 100 : 0;
@@ -545,15 +535,9 @@ function AccountDetailPage({ acct, onDelete, onSell, onOpenHolding }) {
         <Card widget className="span4">
           <div className="widget-head">
             <span className="widget-title">Recent activity</span>
-            <div className="acct-act-head-right">
-              {canAddHere &&
-                <button type="button" className="acct-add-txn" onClick={() => setAddOpen(true)} title={"Add a transaction to " + acct.name}>
-                  {"+ Add transaction"}
-                </button>}
-              <div className="acct-act-sum">
-                <span className="pos">{acSigned(inflow, 0)} in</span>
-                <span className="neg">{AC_MINUS}{acMoney(outflow, 0).replace(AC_MINUS, "")} out</span>
-              </div>
+            <div className="acct-act-sum">
+              <span className="pos">{acSigned(inflow, 0)} in</span>
+              <span className="neg">{AC_MINUS}{acMoney(outflow, 0).replace(AC_MINUS, "")} out</span>
             </div>
           </div>
           {days.length === 0 ?
@@ -626,20 +610,6 @@ function AccountDetailPage({ acct, onDelete, onSell, onOpenHolding }) {
       {confirm && <AcctDeleteModal acct={acct} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); onDelete(); }} />}
 
       {edit && <EditAccountModal acct={acct} onClose={() => setEdit(false)} />}
-
-      {/* In-place add: opens the shared modal pre-scoped to this account. Expense/
-          Income post here directly; Transfer can move money to any other account. */}
-      {addOpen && (() => {
-        const AddModal = window.AddTransactionModal;
-        if (!AddModal) return null;
-        const A = window.ClaudActions || {};
-        return <AddModal
-          accounts={cashAcctNames}
-          lockedAccount={acct.name}
-          onClose={() => setAddOpen(false)}
-          onAdd={(x) => { if (A.addTxn) A.addTxn(x); setAddOpen(false); }}
-          onTransfer={(p) => { if (A.transfer) A.transfer(p); setAddOpen(false); }} />;
-      })()}
 
       {/* same side detail panel as the Transactions tab */}
       {openTxnId && (() => {
