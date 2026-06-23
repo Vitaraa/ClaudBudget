@@ -252,7 +252,7 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
   const meta = useTxnMeta();
   const colors = getCatColors();
   const fileRef = React.useRef(null);
-  const [createRule, setCreateRule] = React.useState(false);
+  const [ruleScopeOpen, setRuleScopeOpen] = React.useState(false);  // categorize/rule scope chooser
   // Inline rename: edit the recorded merchant name, optionally applying the fix to
   // every transaction currently sharing that name (so a single rule covers them).
   const [editingName, setEditingName] = React.useState(false);
@@ -276,7 +276,7 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
   }, [onClose]);
 
   // Reset any in-progress rename when the drawer switches to a different txn.
-  React.useEffect(() => { setEditingName(false); setRenameScope(null); setNameDraft(""); }, [txn && txn.id]);
+  React.useEffect(() => { setEditingName(false); setRenameScope(null); setNameDraft(""); setRuleScopeOpen(false); }, [txn && txn.id]);
 
   if (!txn) return null;
   const total = Math.abs(txn.amt);
@@ -322,18 +322,33 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
 
   function pickCategory(c) {
     if (c === txn.cat) return;
-    // Explicit "Always categorize …" opt-in → recategorize forward (the server
-    // saves a rule for future merchants) without the scope prompt.
-    if (createRule) {
-      TXP_RULES.add({ match: txn.name, cat: c });
-      if (window.ClaudActions && window.ClaudActions.recategorize) window.ClaudActions.recategorize(txn.id, c, "forward");
-      else onRecat(txn.id, c, txn.cat);
-      return;
-    }
-    // Otherwise route through requestRecat, which prompts to apply to other
-    // same-merchant transactions when any exist.
+    // Route through requestRecat, which prompts to apply the change to other
+    // same-merchant transactions (and save a rule) when any exist.
     if (window.requestRecat) { window.requestRecat(txn.id, c); return; }
     onRecat(txn.id, c, txn.cat);
+  }
+
+  /* ---- make-automatic: apply the current category at a chosen scope ----------
+     Wired to real server actions so the choice actually persists:
+       one    → re-tag just this row (bulk recat, no rule)
+       past   → re-tag every existing row whose name matches (bulk recat, no rule)
+       future → save a rule only; existing rows untouched (addRule, applyNow=false)
+       all    → save a rule AND re-tag every existing match (addRule, applyNow=true) */
+  function applyCatScope(scope) {
+    setRuleScopeOpen(false);
+    const A = window.ClaudActions; if (!A) return;
+    const cat = txn.cat;
+    if (scope === "future") { if (A.addRule) A.addRule(txn.name, cat, false); return; }
+    if (scope === "all") { if (A.addRule) A.addRule(txn.name, cat, true); return; }
+    // one | past → re-tag a set of existing rows (always clears their review flag), no rule
+    let ids = [txn.id];
+    if (scope === "past") {
+      const d = window.ClaudData; const list = (d && Array.isArray(d.transactions)) ? d.transactions : [];
+      const needle = (txn.name || "").toLowerCase();
+      if (needle) ids = list.filter((t) => (t.name || "").toLowerCase().includes(needle)).map((t) => t.id);
+    }
+    if (A.bulkTxn && ids.length) A.bulkTxn(ids, "recat", cat);
+    else if (A.recatTxn) A.recatTxn(txn.id, cat);
   }
 
   function onAttach(e) {
@@ -430,17 +445,41 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
               :
               <React.Fragment>
                 {CatPickerC && <CatPickerC value={txn.cat} onPick={pickCategory} />}
-                {/* rule creation */}
+                {/* make-automatic: clicking opens a scope chooser, then actually
+                    saves a rule and/or re-tags existing rows via ClaudActions. */}
                 {hasRule ?
                   <div className="dr-rule on">
                     <span className="dr-rule-ico"><Icon name="spark" /></span>
                     <span className="dr-rule-text">A rule already tags <b>{txn.name}</b> as <b>{txn.cat}</b>. Manage it in Rules.</span>
                   </div>
+                  : ruleScopeOpen ?
+                  <div className="dr-rule-scope">
+                    <p className="recat-lead" style={{ margin: "2px 0 8px" }}>Apply <b>{txn.cat}</b> to <b>{txn.name}</b>{"\u2026"}</p>
+                    <div className="recat-opts">
+                      <button type="button" className="recat-opt" onClick={() => applyCatScope("one")}>
+                        <span className="recat-opt-t">Just this one</span>
+                        <span className="recat-opt-d">Only this transaction. No rule saved.</span>
+                      </button>
+                      <button type="button" className="recat-opt" onClick={() => applyCatScope("past")}>
+                        <span className="recat-opt-t">All past {txn.name}</span>
+                        <span className="recat-opt-d">Re-tag existing {txn.name} transactions. No rule saved.</span>
+                      </button>
+                      <button type="button" className="recat-opt" onClick={() => applyCatScope("future")}>
+                        <span className="recat-opt-t">Going forward</span>
+                        <span className="recat-opt-d">Save a rule so future {txn.name} imports auto-tag; leave existing as-is.</span>
+                      </button>
+                      <button type="button" className="recat-opt strong" onClick={() => applyCatScope("all")}>
+                        <span className="recat-opt-t">Everything {"\u00b7"} past &amp; future</span>
+                        <span className="recat-opt-d">Re-tag existing rows and save a rule for future {txn.name}.</span>
+                      </button>
+                    </div>
+                    <button type="button" className="imp-textbtn" style={{ marginTop: 8 }} onClick={() => setRuleScopeOpen(false)}>Cancel</button>
+                  </div>
                   :
-                  <button type="button" className={"dr-rule" + (createRule ? " on" : "")} onClick={() => setCreateRule((v) => !v)}>
+                  <button type="button" className="dr-rule" onClick={() => setRuleScopeOpen(true)}>
                     <span className="dr-rule-ico"><Icon name="spark" /></span>
                     <span className="dr-rule-text">Always categorize <b>{txn.name}</b> as <b>{txn.cat}</b></span>
-                    <span className={"tcheck-box" + (createRule ? " on" : "")}>{createRule ? "\u2713" : ""}</span>
+                    <span className="cat-caret">{"\u25be"}</span>
                   </button>}
               </React.Fragment>}
           </div>
