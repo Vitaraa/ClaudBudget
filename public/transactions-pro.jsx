@@ -453,8 +453,10 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
                     <span className="dr-rule-text">A rule already tags <b>{txn.name}</b> as <b>{txn.cat}</b>. Manage it in Rules.</span>
                   </div>
                   : ruleScopeOpen ?
-                  <div className="dr-rule-scope">
-                    <p className="recat-lead" style={{ margin: "2px 0 8px" }}>Apply <b>{txn.cat}</b> to <b>{txn.name}</b>{"\u2026"}</p>
+                  <div className="dr-rule-scope" style={{ position: "relative" }}>
+                    <button type="button" onClick={() => setRuleScopeOpen(false)} aria-label="Close" title="Close"
+                      style={{ position: "absolute", top: 0, right: 0, background: "transparent", border: "none", cursor: "pointer", fontSize: "18px", lineHeight: 1, padding: "2px 6px", color: "var(--muted, #8a8472)" }}>{"\u00d7"}</button>
+                    <p className="recat-lead" style={{ margin: "2px 24px 8px 0" }}>Apply <b>{txn.cat}</b> to <b>{txn.name}</b>{"\u2026"}</p>
                     <div className="recat-opts">
                       <button type="button" className="recat-opt" onClick={() => applyCatScope("one")}>
                         <span className="recat-opt-t">Just this one</span>
@@ -473,7 +475,6 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
                         <span className="recat-opt-d">Re-tag existing rows and save a rule for future {txn.name}.</span>
                       </button>
                     </div>
-                    <button type="button" className="imp-textbtn" style={{ marginTop: 8 }} onClick={() => setRuleScopeOpen(false)}>Cancel</button>
                   </div>
                   :
                   <button type="button" className="dr-rule" onClick={() => setRuleScopeOpen(true)}>
