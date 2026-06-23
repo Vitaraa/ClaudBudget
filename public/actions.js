@@ -85,6 +85,12 @@
         .then(function (res) { return done().then(function () { return res; }); }).catch(fail);
     },
     setTxnIcon: function (id, icon) { return API.put('/api/transactions/' + id, { icon: icon }).then(done).catch(fail); },
+    // Rename one transaction and (optionally) its same-merchant siblings.
+    // scope ∈ 'one' | 'all'. Resolves to the server response ({count}).
+    renameTxn: function (id, name, scope) {
+      return API.post('/api/transactions/' + id + '/rename', { name: name, scope: scope || 'one' })
+        .then(function (res) { return done().then(function () { return res; }); }).catch(fail);
+    },
     importTxns: function (items) {
       // Keep the server response (count / skippedCount / linkedCount / skipped)
       // so the caller can surface "Imported N · skipped M · linked K", then

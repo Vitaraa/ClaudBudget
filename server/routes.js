@@ -732,6 +732,37 @@ function register(router) {
     ctx.json(200, { ok: true, count, scope });
   }));
 
+  /* Rename a transaction's display name (e.g. fix a mis-read import). scope:
+       'one' → just this transaction
+       'all' → every sibling sharing the same cleaned merchant name (normName),
+               so two rows the importer named differently collapse to one name and
+               a single category rule covers them all.
+     Renaming only touches `name` — category, amount, history are left alone.
+     `name` is an encrypted column, so the db wrapper enciphers it on write and
+     normName runs on the decrypted read, exactly like recategorize. */
+  router.post('/api/transactions/:id/rename', auth.requireAuth(async (req, res, ctx) => {
+    const uid = ctx.user.id;
+    const row = ownedRow('transactions', ctx.params.id, uid);
+    const name = str(ctx.body.name, 'name', { required: true, max: 120 });
+    const scope = (str(ctx.body.scope, 'scope') || 'one').toLowerCase();
+    const key = normName(row.name);
+    let count = 0;
+    tx(() => {
+      if (scope === 'all' && key) {
+        const rows = db.prepare('SELECT id, name FROM transactions WHERE user_id=?').all(uid);
+        for (const r of rows) {
+          if (normName(r.name) !== key) continue;
+          db.prepare('UPDATE transactions SET name=? WHERE id=? AND user_id=?').run(name, r.id, uid);
+          count++;
+        }
+      } else {
+        db.prepare('UPDATE transactions SET name=? WHERE id=? AND user_id=?').run(name, row.id, uid);
+        count++;
+      }
+    });
+    ctx.json(200, { ok: true, count, scope });
+  }));
+
   /* --------------------------------------------------------- RULES */
   router.get('/api/rules', auth.requireAuth(async (req, res, ctx) => {
     ctx.json(200, { rules: db.prepare('SELECT * FROM rules WHERE user_id = ?').all(ctx.user.id) });

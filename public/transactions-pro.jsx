@@ -241,11 +241,23 @@ function TagEditor({ tags, onChange }) {
 /* ============================================================
    DETAIL DRAWER
    ============================================================ */
+/* Normalise a name for "same merchant" grouping in the rename scope prompt.
+   Mirrors the server's normName (lib/dedup.js) closely enough that the count we
+   show matches what the server will rename. Advisory only; server is final. */
+const DR_RENAME_NOISE = { pos: 1, purchase: 1, payment: 1, debit: 1, credit: 1, visa: 1, mastercard: 1, amex: 1, recurring: 1, interac: 1, eft: 1, ach: 1, preauth: 1, preauthorized: 1, preauthorised: 1 };
+function drNormName(s) {
+  return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((t) => t && !DR_RENAME_NOISE[t]).join(" ").trim();
+}
 function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewReceipt, hasRule }) {
   const meta = useTxnMeta();
   const colors = getCatColors();
   const fileRef = React.useRef(null);
   const [createRule, setCreateRule] = React.useState(false);
+  // Inline rename: edit the recorded merchant name, optionally applying the fix to
+  // every transaction currently sharing that name (so a single rule covers them).
+  const [editingName, setEditingName] = React.useState(false);
+  const [nameDraft, setNameDraft] = React.useState("");
+  const [renameScope, setRenameScope] = React.useState(null);  // { newName, others, from } while choosing scope
   // Source of truth is the server-backed fields carried on the txn object
   // (ClaudData.transactions already exposes note/tags/splits/attachment/history);
   // the local meta store is only a fallback/optimistic cache.
@@ -262,6 +274,9 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Reset any in-progress rename when the drawer switches to a different txn.
+  React.useEffect(() => { setEditingName(false); setRenameScope(null); setNameDraft(""); }, [txn && txn.id]);
 
   if (!txn) return null;
   const total = Math.abs(txn.amt);
@@ -280,6 +295,30 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
     return cats.find((x) => x !== c) || c;
   }
   function clearSplit() { TXP_META.patch(txn.id, { splits: [] }); }
+
+  /* ---- rename (fix a mis-recorded merchant name) ---- */
+  function startRename() { setNameDraft(txn.name); setEditingName(true); }
+  function cancelRename() { setEditingName(false); setNameDraft(""); }
+  function applyRename(name, scope) {
+    setRenameScope(null); setEditingName(false); setNameDraft("");
+    const A = window.ClaudActions;
+    if (A && A.renameTxn) A.renameTxn(txn.id, name, scope);
+    else if (A && A.updateTxn) A.updateTxn(txn.id, { name: name });   // fallback: single-row rename
+  }
+  function commitRename() {
+    const next = nameDraft.trim();
+    if (!next || next === txn.name) { cancelRename(); return; }
+    // Count other transactions that currently share this name (advisory; the
+    // server re-derives the set). If any exist, ask whether to fix them too.
+    const d = window.ClaudData;
+    const list = (d && Array.isArray(d.transactions)) ? d.transactions : [];
+    const key = drNormName(txn.name);
+    let others = 0;
+    if (key) for (const t of list) { if (t.id === txn.id) continue; if (drNormName(t.name) === key) others++; }
+    setEditingName(false);
+    if (others > 0) setRenameScope({ newName: next, others, from: txn.name });
+    else applyRename(next, "one");
+  }
 
   function pickCategory(c) {
     if (c === txn.cat) return;
@@ -314,7 +353,25 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
         <div className="dr-head">
           <window.IconPicker value={txn.icon} onPick={(n) => onSetIcon(txn.id, n)} />
           <div className="dr-head-id">
-            <div className="dr-merchant">{txn.name}</div>
+            <div className="dr-merchant">
+              {editingName ?
+                <span className="dr-rename">
+                  <input className="dr-rename-input" autoFocus value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitRename(); } else if (e.key === "Escape") { e.stopPropagation(); cancelRename(); } }}
+                    aria-label="Transaction name"
+                    style={{ font: "inherit", fontWeight: 700, width: "100%", boxSizing: "border-box", padding: "3px 8px", borderRadius: 8, border: "1px solid var(--border, #d8d2bd)", background: "var(--surface, #fff)", color: "var(--text)" }} />
+                  <span style={{ display: "flex", gap: 10, marginTop: 6 }}>
+                    <button type="button" className="imp-textbtn" onClick={cancelRename}>Cancel</button>
+                    <button type="button" className="imp-textbtn" style={{ fontWeight: 700, color: "var(--accent)" }} onClick={commitRename}>Save name</button>
+                  </span>
+                </span>
+                :
+                <React.Fragment>
+                  <span>{txn.name}</span>
+                  <button type="button" className="dr-link dr-merchant-edit" style={{ marginLeft: 8 }} onClick={startRename} title="Edit name">Edit</button>
+                </React.Fragment>}
+            </div>
             <div className={"dr-amt " + (txn.amt >= 0 ? "pos" : "neg")} style={{ color: txn.amt >= 0 ? "var(--green)" : "var(--text)" }}>{txpSigned(txn.amt)}</div>
             <div className="dr-sub">{txn.day} {"\u00B7"} {txn.account}</div>
           </div>
@@ -322,6 +379,24 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
         </div>
 
         <div className="dr-body">
+          {/* rename scope: fix the name on just this row, or every row that shares it */}
+          {renameScope &&
+            <div className="dr-section">
+              <p className="recat-lead" style={{ margin: "0 0 8px" }}>
+                Rename to <b>{renameScope.newName}</b>. There {renameScope.others === 1 ? "is" : "are"} <b>{renameScope.others}</b> other {renameScope.others === 1 ? "transaction" : "transactions"} named <b>{renameScope.from}</b>.
+              </p>
+              <div className="recat-opts">
+                <button type="button" className="recat-opt" onClick={() => applyRename(renameScope.newName, "one")}>
+                  <span className="recat-opt-t">Just this one</span>
+                  <span className="recat-opt-d">Only this transaction is renamed.</span>
+                </button>
+                <button type="button" className="recat-opt strong" onClick={() => applyRename(renameScope.newName, "all")}>
+                  <span className="recat-opt-t">All {renameScope.others + 1}</span>
+                  <span className="recat-opt-d">Rename every transaction named “{renameScope.from}” — a single rule then covers them all.</span>
+                </button>
+              </div>
+            </div>}
+
           {/* review status */}
           {txn.needsReview ?
             <div className="dr-section">

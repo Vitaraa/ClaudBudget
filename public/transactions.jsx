@@ -374,6 +374,7 @@ const TX_MERCHANTS = [
   [/cineplex/i, "Cineplex"], [/\bgoogle\b/i, "Google"], [/\bmicrosoft\b|msft/i, "Microsoft"], [/\bopenai\b/i, "OpenAI"],
   [/anthropic|\bclaude\b/i, "Anthropic"], [/wheelwiz/i, "WheelWiz"], [/superstore/i, "Superstore"], [/loblaws?/i, "Loblaws"],
   [/save[- ]?on[- ]?foods/i, "Save-On-Foods"], [/\bt&t\b/i, "T&T Supermarket"], [/foody world/i, "Foody World"],
+  [/\bclub\s?16\b|trevor linden fitness/i, "Club16"],
   [/cashback|remise en argent/i, "Cashback"]
 ];
 function txMerchantAlias(s) { for (const [re, name] of TX_MERCHANTS) if (re.test(s)) return name; return null; }
@@ -728,22 +729,39 @@ function txParsePdfLines(lines) {
       if (!inSection) { if (TX_SECTION_START.test(line)) inSection = true; continue; }
       if (TX_SECTION_END.test(line)) { inSection = false; continue; }
     }
-    if (TX_STMT_SKIP.test(line)) continue;                  // summary / payment-slip line
-    const dm = line.match(dateRe);
+    // A summary / payment-slip keyword ("Minimum payment", "Credit limit"...) acts
+    // as a hard RIGHT boundary on the flattened line: text from it onward is either
+    // a genuine summary row (nothing real precedes it -> dropped below) or a right
+    // column that merely shares this Y band (the real charge precedes it -> kept).
+    // Parsing only this `core` stops a right panel - even one carrying its own $
+    // figure like a credit limit - from stealing the amount or the name, so two
+    // identical charges sitting on different bands can no longer diverge.
+    const skipM = line.match(TX_STMT_SKIP);
+    const core = skipM ? line.slice(0, skipM.index) : line;
+    const dm = core.match(dateRe);
     if (!dm) continue;
     const date = txParseDate(dm[0], yearHint);
     if (!date) continue;
-    const monies = line.match(moneyRe);
+    const monies = core.match(moneyRe);
     if (!monies || !monies.length) continue;
-    const amt = txParseAmount(monies[monies.length - 1]);   // rightmost money = txn amount (tune per bank)
+    const amtTok = monies[monies.length - 1];               // rightmost money in the core = txn amount
+    const amt = txParseAmount(amtTok);
     if (amt == null) continue;
-    // recover the payee: strip money first (so a date isn't nicked out of the
-    // decimals), then peel the leading trans/post date(s), then the bank category.
-    let name = line;
-    monies.forEach((mm) => { name = name.replace(mm, " "); });
-    for (let i = 0; i < 3; i++) { const b = name; if (TX_DATE_LEAD.test(name)) name = name.replace(TX_DATE_LEAD, "").trim(); if (name === b) break; }
-    const bc = txStripBankCat(name);
-    name = bc.name.replace(/\s+/g, " ").trim().replace(/^[\-–·,\s]+|[\-–·,\s]+$/g, "");
+    // Recover the payee from the core: cut at the amount (drops any same-band text
+    // sitting past it), then strip remaining money, leading date(s), bank category.
+    const buildName = (src) => {
+      let nm = src;
+      (nm.match(moneyRe) || []).forEach((mm) => { nm = nm.replace(mm, " "); });
+      for (let i = 0; i < 3; i++) { const b = nm; if (TX_DATE_LEAD.test(nm)) nm = nm.replace(TX_DATE_LEAD, "").trim(); if (nm === b) break; }
+      const bc = txStripBankCat(nm);
+      nm = bc.name.replace(/\s+/g, " ").trim().replace(/^[\-–·,\s]+|[\-–·,\s]+$/g, "");
+      return { nm, bc };
+    };
+    const cutAt = core.lastIndexOf(amtTok);
+    let { nm: name, bc } = buildName(cutAt > 0 ? core.slice(0, cutAt) : core);
+    // Fallback: if cutting left nothing legible, the payee may genuinely sit after
+    // the amount on this layout — rebuild from the whole line rather than drop it.
+    if ((name.match(/[A-Za-z]/g) || []).length < 2 && cutAt > 0) ({ nm: name, bc } = buildName(core));
     // A real charge has a payee. Bare "date + amount" rows (e.g. the payment slip
     // "Jun 04, 2026  $10.00") have no letters left → skip them.
     if ((name.match(/[A-Za-z]/g) || []).length < 2) continue;
