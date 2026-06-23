@@ -1,6 +1,6 @@
 {
   "name": "claud-budget",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
   "description": "Claud — personal finance dashboard. Node + SQLite backend serving a static React frontend.",
   "main": "server/index.js",

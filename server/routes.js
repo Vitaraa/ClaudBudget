@@ -14,7 +14,7 @@ const quotes = require('./lib/quotes');
 const mailer = require('./lib/mailer');
 const ratelimit = require('./lib/ratelimit');
 const google = require('./lib/google');
-const { computeMatchKey, findDuplicate, isDuplicateOf, matchRecurring, maybeAdvanceRecurring } = require('./lib/dedup');
+const { computeMatchKey, findDuplicate, isDuplicateOf, matchRecurring, maybeAdvanceRecurring, normName } = require('./lib/dedup');
 
 const nowISO = () => new Date().toISOString();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -74,14 +74,17 @@ function adjustAccountBalance(uid, acctId, delta) {
    pass a normalized `t` ({ account_id, account_name, name, category, amount,
    date, icon, review, reason, excluded }) and options for origin/recurringId.
    Does NOT touch balances — callers own balance adjustment. */
-function insertTxn(uid, t, { origin = 'manual', recurringId = null } = {}) {
+function insertTxn(uid, t, { origin = 'manual', recurringId = null, transferId = null } = {}) {
   const id = newId('tx_');
   const matchKey = computeMatchKey(t.account_id, t.amount, t.date);
-  db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,category,amount,date,icon,review,reason,excluded,origin,match_key,recurring_id,created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    id, uid, t.account_id || null, t.account_name || null, t.name, t.category || null, t.amount,
+  // `merchant` (the full raw descriptor) sits in ENCRYPTED_FIELDS so the wrapper
+  // encrypts it by position; transfer_id is plaintext. Every VALUE is a `?` so
+  // the encryption param-mapping in model.js stays positional and correct.
+  db.prepare(`INSERT INTO transactions (id,user_id,account_id,account_name,name,merchant,category,amount,date,icon,review,reason,excluded,origin,match_key,recurring_id,transfer_id,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, uid, t.account_id || null, t.account_name || null, t.name, t.merchant || null, t.category || null, t.amount,
     t.date, t.icon || null, bool(t.review), t.reason || null, bool(t.excluded),
-    origin, matchKey, recurringId, nowISO());
+    origin, matchKey, recurringId, transferId, nowISO());
   return id;
 }
 
@@ -90,12 +93,12 @@ function txnRow(r) {
   if (!r) return r;
   return {
     id: r.id, account_id: r.account_id, account: r.account_name, account_name: r.account_name,
-    name: r.name, cat: r.category, category: r.category, amount: r.amount, amt: r.amount,
+    name: r.name, merchant: r.merchant || null, cat: r.category, category: r.category, amount: r.amount, amt: r.amount,
     date: r.date, day: r.date, icon: r.icon,
     review: !!r.review, reason: r.reason, excluded: !!r.excluded,
     note: r.note || '', tags: jparse(r.tags, []), splits: jparse(r.splits, []),
     attachment: r.attachment || null, history: jparse(r.history, []),
-    origin: r.origin, recurring_id: r.recurring_id
+    origin: r.origin, recurring_id: r.recurring_id, transfer_id: r.transfer_id || null
   };
 }
 function goalRow(g) {
@@ -172,6 +175,19 @@ function applyRules(uid, name) {
   const lower = name.toLowerCase();
   for (const r of rules) if (r.match && lower.includes(r.match.toLowerCase())) return r.category;
   return null;
+}
+
+/* Create-or-update a categorisation rule for `match` → `category`. Used by the
+   retroactive recategorise flow so picking "all going forward" / "everything"
+   also teaches future imports. match is encrypted at rest, so we scan + compare
+   the decrypted value (case-insensitive) rather than querying by ciphertext. */
+function upsertRule(uid, match, category) {
+  const m = String(match == null ? '' : match).trim();
+  if (!m || !category) return;
+  const rules = db.prepare('SELECT id, match FROM rules WHERE user_id = ?').all(uid);
+  const existing = rules.find((r) => String(r.match || '').toLowerCase() === m.toLowerCase());
+  if (existing) db.prepare('UPDATE rules SET category=? WHERE id=? AND user_id=?').run(category, existing.id, uid);
+  else db.prepare('INSERT INTO rules (id,user_id,match,category,created_at) VALUES (?,?,?,?,?)').run(newId('rl_'), uid, m, category, nowISO());
 }
 
 /* ----------------------------------------------------- email verification */
@@ -507,7 +523,7 @@ function register(router) {
       reason = 'Possible duplicate of an existing transaction';
     }
 
-    const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, category: cat, amount, date, icon, review, reason, excluded: bool(b.excluded) }, { origin: 'manual', recurringId });
+    const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, merchant: str(b.merchant, 'merchant'), category: cat, amount, date, icon, review, reason, excluded: bool(b.excluded) }, { origin: 'manual', recurringId });
     adjustAccountBalance(uid, acctId, amount);   // running balance follows the new transaction (always)
     ctx.json(200, { transaction: txnRow(ownedRow('transactions', id, uid)), duplicateOf: dup ? dup.id : null, recurringId });
   }));
@@ -548,9 +564,22 @@ function register(router) {
     ctx.json(200, { transaction: txnRow(ownedRow('transactions', row.id, uid)) });
   }));
   router.delete('/api/transactions/:id', auth.requireAuth(async (req, res, ctx) => {
-    const row = ownedRow('transactions', ctx.params.id, ctx.user.id);
-    db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(ctx.params.id, ctx.user.id);
-    adjustAccountBalance(ctx.user.id, row.account_id, -row.amount);   // removing the txn reverses its effect
+    const uid = ctx.user.id;
+    const row = ownedRow('transactions', ctx.params.id, uid);
+    tx(() => {
+      db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(row.id, uid);
+      adjustAccountBalance(uid, row.account_id, -row.amount);   // removing the txn reverses its effect
+      // A transfer is two linked legs — delete the partner too so the pair never
+      // desyncs and the OTHER account's balance is restored as well. (transfer_id
+      // is plaintext; amount comes back decrypted, so the reversal is exact.)
+      if (row.transfer_id) {
+        const sibs = db.prepare('SELECT id, account_id, amount FROM transactions WHERE user_id=? AND transfer_id=?').all(uid, row.transfer_id);
+        for (const s of sibs) {
+          db.prepare('DELETE FROM transactions WHERE id=? AND user_id=?').run(s.id, uid);
+          adjustAccountBalance(uid, s.account_id, -s.amount);
+        }
+      }
+    });
     ctx.json(200, { ok: true });
   }));
   router.post('/api/transactions/bulk', auth.requireAuth(async (req, res, ctx) => {
@@ -609,7 +638,7 @@ function register(router) {
         const reason = recur ? `Linked to recurring: ${recur.name}`
                              : (str(b.reason, 'reason') || 'Imported — confirm the category');
 
-        const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, category: cat, amount, date, icon, review, reason, excluded: false },
+        const id = insertTxn(uid, { account_id: acctId, account_name: acctName, name, merchant: str(b.merchant, 'merchant'), category: cat, amount, date, icon, review, reason, excluded: false },
           { origin: 'import', recurringId: recur ? recur.id : null });
         if (recur) { linkedCount++; maybeAdvanceRecurring(db, uid, recur, date); }
         if (acctId) balDeltas[acctId] = (balDeltas[acctId] || 0) + amount;   // imported money moves the balance
@@ -626,6 +655,81 @@ function register(router) {
       skipped,
       transactions: created.map((id) => txnRow(db.prepare('SELECT * FROM transactions WHERE id=?').get(id)))
     });
+  }));
+
+  /* Account-to-account transfer. Records TWO linked legs — an outflow on the
+     source and an inflow on the destination — both with category 'Transfer' and
+     excluded=1 so they move the balances but never count as income or spending
+     (a transfer doesn't change net worth). They share a transfer_id so the pair
+     is recognisable. Mirrors the manual-add balance ledger: adjust both. */
+  router.post('/api/transactions/transfer', auth.requireAuth(async (req, res, ctx) => {
+    const b = ctx.body, uid = ctx.user.id;
+    const resolveAcct = (idRaw, nameRaw) => {
+      const id = str(idRaw, 'account_id');
+      if (id) { const a = db.prepare('SELECT name FROM accounts WHERE id=? AND user_id=?').get(id, uid); if (!a) throw new HttpError(404, 'Account not found'); return { id, name: a.name }; }
+      const name = str(nameRaw, 'account');
+      if (name) { const a = findAccountByName(uid, name); if (!a) throw new HttpError(404, 'Account not found'); return { id: a.id, name: a.name }; }
+      throw new HttpError(400, 'An account is required');
+    };
+    const from = resolveAcct(b.from_account_id, b.from_account || b.from);
+    const to = resolveAcct(b.to_account_id, b.to_account || b.to);
+    if (from.id === to.id) throw new HttpError(400, 'Choose two different accounts');
+    const amount = round2(Math.abs(num(b.amt != null ? b.amt : b.amount, 'amount', { required: true })));
+    if (!(amount > 0)) throw new HttpError(400, 'Amount must be greater than zero');
+    const date = str(b.date || b.day, 'date') || today();
+    const note = str(b.note, 'note', { max: 5000 });
+    const transferId = newId('tr_');
+    let outId, inId;
+    tx(() => {
+      outId = insertTxn(uid, { account_id: from.id, account_name: from.name, name: `Transfer → ${to.name}`, category: 'Transfer', amount: -amount, date, icon: 'repeat', review: 0, reason: null, excluded: 1 }, { origin: 'manual', transferId });
+      inId = insertTxn(uid, { account_id: to.id, account_name: to.name, name: `Transfer ← ${from.name}`, category: 'Transfer', amount: amount, date, icon: 'repeat', review: 0, reason: null, excluded: 1 }, { origin: 'manual', transferId });
+      if (note) {
+        db.prepare('UPDATE transactions SET note=? WHERE id=? AND user_id=?').run(note, outId, uid);
+        db.prepare('UPDATE transactions SET note=? WHERE id=? AND user_id=?').run(note, inId, uid);
+      }
+      adjustAccountBalance(uid, from.id, -amount);   // money leaves the source…
+      adjustAccountBalance(uid, to.id, amount);      // …and lands in the destination
+    });
+    ctx.json(200, { ok: true, transfer_id: transferId, transactions: [outId, inId].map((id) => txnRow(ownedRow('transactions', id, uid))) });
+  }));
+
+  /* Retroactive recategorisation. Changing one transaction's category can also
+     update its siblings (other rows with the same cleaned merchant name) and
+     teach a forward rule so future imports/adds match. scope:
+       'one'     → just this transaction
+       'forward' → this + siblings dated on/after it, plus a saved rule (future)
+       'all'     → every sibling (any date), plus a saved rule (future)
+     Grouping is by normalised display name (normName) so "Amazon" groups with
+     "Amazon" but never with "Apple". Each changed row records category history,
+     exactly like the PUT route. */
+  router.post('/api/transactions/:id/recategorize', auth.requireAuth(async (req, res, ctx) => {
+    const uid = ctx.user.id;
+    const row = ownedRow('transactions', ctx.params.id, uid);
+    const category = str(ctx.body.category, 'category', { required: true });
+    const scope = (str(ctx.body.scope, 'scope') || 'one').toLowerCase();
+    const key = normName(row.name);
+    let count = 0;
+    const recatOne = (r) => {
+      if (r.category === category) return;                 // already there → nothing to do
+      const history = jparse(r.history, []);
+      history.push({ from: r.category, to: category, at: nowISO() });
+      db.prepare('UPDATE transactions SET category=?, review=0, history=? WHERE id=? AND user_id=?').run(category, JSON.stringify(history), r.id, uid);
+      count++;
+    };
+    tx(() => {
+      if (scope === 'one' || !key) {
+        recatOne(row);
+      } else {
+        const rows = db.prepare('SELECT id, name, category, date, history FROM transactions WHERE user_id=?').all(uid);
+        for (const r of rows) {
+          if (normName(r.name) !== key) continue;
+          if (scope === 'forward' && String(r.date) < String(row.date)) continue;   // forward = this date onward
+          recatOne(r);
+        }
+        upsertRule(uid, row.name, category);                // future imports/adds auto-tag this merchant
+      }
+    });
+    ctx.json(200, { ok: true, count, scope });
   }));
 
   /* --------------------------------------------------------- RULES */

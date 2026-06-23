@@ -40,6 +40,9 @@
     // `origin` is deliberately NOT forwarded — the server assigns it.
     if (x.account_id !== undefined) t.account_id = x.account_id;
     if (x.forceInclude !== undefined) t.forceInclude = x.forceInclude;
+    // The full original statement descriptor (kept verbatim for future grouping/
+    // sorting); the server stores it alongside the tidy display name.
+    if (x.merchant !== undefined && x.merchant !== null) t.merchant = x.merchant;
     return t;
   }
   function mapHolding(h) {
@@ -72,6 +75,15 @@
     updateTxn: function (id, patch) { return API.put('/api/transactions/' + id, patch).then(done).catch(fail); },
     removeTxn: function (id) { return API.del('/api/transactions/' + id).then(done).catch(fail); },
     recatTxn: function (id, cat) { return API.put('/api/transactions/' + id, { category: cat, review: false }).then(done).catch(fail); },
+    // Move a sum between two accounts (two linked, excluded legs server-side).
+    // p = { from_account_id|from_account, to_account_id|to_account, amount, date, note }
+    transfer: function (p) { return API.post('/api/transactions/transfer', p).then(done).catch(fail); },
+    // Recategorize one transaction and (optionally) its same-merchant siblings.
+    // scope ∈ 'one' | 'forward' | 'all'. Resolves to the server response ({count}).
+    recategorize: function (id, category, scope) {
+      return API.post('/api/transactions/' + id + '/recategorize', { category: category, scope: scope || 'one' })
+        .then(function (res) { return done().then(function () { return res; }); }).catch(fail);
+    },
     setTxnIcon: function (id, icon) { return API.put('/api/transactions/' + id, { icon: icon }).then(done).catch(fail); },
     importTxns: function (items) {
       // Keep the server response (count / skippedCount / linkedCount / skipped)

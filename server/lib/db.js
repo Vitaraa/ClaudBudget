@@ -217,6 +217,18 @@ addColumn("ALTER TABLE holdings ADD COLUMN account_id TEXT REFERENCES accounts(i
 addColumn("ALTER TABLE transactions ADD COLUMN origin       TEXT NOT NULL DEFAULT 'manual'");
 addColumn("ALTER TABLE transactions ADD COLUMN match_key    TEXT");
 addColumn("ALTER TABLE transactions ADD COLUMN recurring_id TEXT");
+
+/* `merchant` is the full, ORIGINAL statement descriptor as it arrived from the
+   bank/card (e.g. "AMZN MKTP CA*2X4...VANCOUVER BC"), kept alongside the tidy
+   `name` we display. Stored so we can group/sort by true merchant in future and
+   re-clean if the dictionary improves; SENSITIVE, so it's added to
+   ENCRYPTED_FIELDS in model.js and encrypted at rest. NULL for older rows and
+   for manual entries that never had a raw descriptor — callers fall back to
+   `name`. `transfer_id` links the two legs of an account-to-account transfer
+   (outflow on the source, inflow on the destination); plaintext like
+   recurring_id/match_key so it stays queryable. */
+addColumn("ALTER TABLE transactions ADD COLUMN merchant     TEXT");
+addColumn("ALTER TABLE transactions ADD COLUMN transfer_id  TEXT");
 // Index for match_key lookups. Created HERE (not in the CREATE TABLE block
 // above) because match_key is added by the ALTER just above — on a fresh DB the
 // column doesn't exist while the schema block runs. Idempotent; idx_txn_user_date

@@ -27,7 +27,7 @@ const { enc, dec, isEnc } = require('./crypto');
 const ENCRYPTED_FIELDS = {
   users:               ['name'],
   accounts:            ['name', 'institution', 'mask', 'balance'],
-  transactions:        ['name', 'category', 'amount', 'account_name', 'note', 'tags', 'splits', 'attachment', 'history'],
+  transactions:        ['name', 'merchant', 'category', 'amount', 'account_name', 'note', 'tags', 'splits', 'attachment', 'history'],
   rules:               ['match', 'category'],
   budget_groups:       ['label'],
   budget_categories:   ['name', 'budget', 'roll'],

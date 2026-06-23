@@ -673,6 +673,85 @@ function IconPicker({ value, onPick, className = "trow-ico", color, menuAlign = 
 }
 Object.assign(window, { CatPicker, IconPicker });
 
+/* ---- retroactive recategorisation ------------------------------------------
+   Changing one transaction's category can ripple to other transactions from the
+   same merchant. requestRecat is the single entry point used by every category
+   picker: it counts same-merchant siblings (grouped by the CLEANED display name,
+   normalised), and — if any exist — opens RecatScopeModal so the user picks the
+   scope (this one / going forward / everything). With no siblings it just
+   applies to the one row. The actual mutation is server-authoritative
+   (ClaudActions.recategorize). Mirrors server/lib/dedup.normName so the count
+   the user sees matches what the server will change. */
+const RECAT_NOISE = { pos: 1, purchase: 1, payment: 1, debit: 1, credit: 1, visa: 1, mastercard: 1, amex: 1, recurring: 1, interac: 1, eft: 1, ach: 1, preauth: 1, "pre-auth": 1, preauthorized: 1, "pre-authorized": 1, preauthorised: 1, "pre-authorised": 1 };
+function recatNorm(raw) {
+  const s = String(raw == null ? "" : raw).toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return s.split(" ").filter((t) => t && !RECAT_NOISE[t]).join(" ").replace(/\s+/g, " ").trim();
+}
+window.requestRecat = function (id, newCat) {
+  const A = window.ClaudActions || {};
+  const applyOne = () => { if (A.recategorize) A.recategorize(id, newCat, "one"); else if (A.recatTxn) A.recatTxn(id, newCat); };
+  const D = window.ClaudData || {};
+  const list = (D && Array.isArray(D.transactions)) ? D.transactions : [];
+  const t = list.find((x) => x.id === id);
+  if (!t) { if (A.recatTxn) A.recatTxn(id, newCat); return; }
+  const curCat = t.cat != null ? t.cat : t.category;
+  if (newCat === curCat) return;                         // no-op
+  const key = recatNorm(t.name);
+  if (key.length < 2) { applyOne(); return; }            // unmatchable name → just this one
+  const d = t.date || t.day || "";
+  let allCount = 0, fwdCount = 0;
+  list.forEach((x) => {
+    if (x.id === id) return;
+    if (recatNorm(x.name) !== key) return;
+    const xCat = x.cat != null ? x.cat : x.category;
+    if (xCat === newCat) return;                         // already this category → wouldn't change
+    allCount++;
+    const xd = x.date || x.day || "";
+    if (xd && d && xd >= d) fwdCount++;
+  });
+  if (allCount === 0) { applyOne(); return; }            // unique merchant → no prompt
+  window.dispatchEvent(new CustomEvent("claud:recat", { detail: { id, cat: newCat, name: t.name, allCount, fwdCount } }));
+};
+
+/* The scope chooser shown when same-merchant siblings exist. */
+function RecatScopeModal({ req, onClose, onChoose }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const { name, cat, allCount, fwdCount } = req;
+  return (
+    <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fs-modal recat-modal" role="dialog" aria-modal="true" aria-label="Apply category to other transactions">
+        <div className="fs-modal-head">
+          <span className="fs-modal-title"><span className="fs-ico"><Icon name="tag" /></span>Apply to other transactions?</span>
+          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
+        </div>
+        <div className="recat-body">
+          <p className="recat-lead">You set this to <b>{cat}</b>. There {allCount === 1 ? "is" : "are"} <b>{allCount}</b> other {allCount === 1 ? "transaction" : "transactions"} from <b>{name}</b> in a different category.</p>
+          <div className="recat-opts">
+            <button type="button" className="recat-opt" onClick={() => onChoose("one")}>
+              <span className="recat-opt-t">Just this one</span>
+              <span className="recat-opt-d">Only this transaction changes.</span>
+            </button>
+            <button type="button" className="recat-opt" onClick={() => onChoose("forward")}>
+              <span className="recat-opt-t">All going forward{fwdCount > 0 ? " · " + fwdCount + " newer" : ""}</span>
+              <span className="recat-opt-d">This{fwdCount > 0 ? " and " + fwdCount + " newer" : ""}, plus future {name} purchases (saves a rule).</span>
+            </button>
+            <button type="button" className="recat-opt strong" onClick={() => onChoose("all")}>
+              <span className="recat-opt-t">Everything · {allCount} {allCount === 1 ? "other" : "others"}</span>
+              <span className="recat-opt-d">Every {name} transaction, past &amp; future (saves a rule).</span>
+            </button>
+          </div>
+        </div>
+        <div className="fs-modal-foot">
+          <div className="right">{Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}</div>
+        </div>
+      </div>
+    </div>);
+}
+
 const TXN_SORTS = [
   ["newest", "Newest first"],
   ["oldest", "Oldest first"],
@@ -755,9 +834,12 @@ function TransactionsPage({ added = [], removed = [], catOverrides = {}, iconOve
     if (reviewCount === 0 && reviewOnly) setReviewOnly(false);
   }, [reviewCount, reviewOnly]);
 
-  // recategorize: update the app-level override, log history, and clear the review flag
+  // recategorize: route through requestRecat (which may prompt to apply the new
+  // category to other transactions from the same merchant), then log history and
+  // clear the review flag locally. Falls back to the plain onRecat prop.
   function recat(id, newCat, oldCat) {
-    onRecat && onRecat(id, newCat);
+    if (window.requestRecat) window.requestRecat(id, newCat);
+    else if (onRecat) onRecat(id, newCat);
     TXP_META.patch(id, (cur) => ({
       reviewed: true,
       history: [...(cur.history || []), { from: oldCat, to: newCat, at: Date.now() }]
@@ -2457,6 +2539,7 @@ function App() {
   const [iconOverrides, setIconOverrides] = useState({});
   const [addTxnOpen, setAddTxnOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(null);
+  const [recatReq, setRecatReq] = useState(null);   // retroactive-category scope prompt
   // investments
   const holdings = ClaudData.holdings;
   const [openHoldingId, setHoldingOpen] = useState(null);
@@ -2498,6 +2581,10 @@ function App() {
 
   // Investments empty-state CTA → open the add-holding modal.
   useEffect(() => { const h = () => setInvModal({ mode: "add" }); window.addEventListener("claud:add-holding", h); return () => window.removeEventListener("claud:add-holding", h); }, []);
+
+  // requestRecat dispatches this when a category change has same-merchant
+  // siblings → open the scope chooser.
+  useEffect(() => { const h = (e) => setRecatReq(e.detail || null); window.addEventListener("claud:recat", h); return () => window.removeEventListener("claud:recat", h); }, []);
 
   // ---- settings persistence (appearance + layout + reporting cycle) ----
   const didInitSettings = useRef(false);
@@ -2979,8 +3066,12 @@ function App() {
           onClose={() => setDashPickerOpen(false)}
           onSave={(ids) => { if (window.ClaudActions) ClaudActions.saveSettings({ dashboardAccounts: ids }); setDashPickerOpen(false); }} />}
 
+      {/* ---- Retroactive category scope ---- */}
+      {recatReq && <RecatScopeModal req={recatReq} onClose={() => setRecatReq(null)}
+        onChoose={(scope) => { if (window.ClaudActions && ClaudActions.recategorize) ClaudActions.recategorize(recatReq.id, recatReq.cat, scope); setRecatReq(null); }} />}
+
       {/* ---- Add transaction ---- */}
-      {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} />}
+      {addTxnOpen && <AddTransactionModal accounts={cashAcctNames} onClose={() => setAddTxnOpen(false)} onAdd={(x) => { ClaudActions.addTxn(x); setAddTxnOpen(false); }} onTransfer={(p) => { ClaudActions.transfer(p); setAddTxnOpen(false); }} />}
 
       {/* ---- Import statements / receipts ---- */}
       {importOpen && <ImportModal accounts={cashAcctList} initialMode={importOpen} onClose={() => setImportOpen(null)} onImport={(items) => {

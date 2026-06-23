@@ -34,13 +34,25 @@ const txDayLabel = (iso) => {
   return M[d.getMonth()] + " " + d.getDate();
 };
 
-function AddTransactionModal({ accounts = [], onClose, onAdd }) {
+/* The add-transaction modal does three jobs, chosen by the Type control:
+   Expense / Income (a single signed transaction) and Transfer (moves a sum
+   between two accounts — handled by onTransfer, which the server records as two
+   linked, spending-excluded legs). `lockedAccount` pre-selects the account when
+   opened from an account's own page; `initialType` opens straight on a type. */
+function AddTransactionModal({ accounts = [], onClose, onAdd, onTransfer, lockedAccount, initialType }) {
   const { Segmented, Button } = TX_DS;
-  const [kind, setKind] = React.useState("Expense");
+  const acctList = accounts || [];
+  const canTransfer = !!onTransfer && acctList.length >= 2;
+  const TYPES = canTransfer ? ["Expense", "Income", "Transfer"] : ["Expense", "Income"];
+  const firstAcct = (lockedAccount && acctList.indexOf(lockedAccount) !== -1) ? lockedAccount : (acctList[0] || "");
+  const [kind, setKind] = React.useState(TYPES.indexOf(initialType) !== -1 ? initialType : "Expense");
   const [name, setName] = React.useState("");
   const [amt, setAmt] = React.useState("");
   const [cat, setCat] = React.useState("Groceries");
-  const [account, setAccount] = React.useState(accounts[0] || "");
+  const [account, setAccount] = React.useState(firstAcct);
+  const [fromAcct, setFromAcct] = React.useState(firstAcct);
+  const [toAcct, setToAcct] = React.useState(acctList.find((a) => a !== firstAcct) || "");
+  const [note, setNote] = React.useState("");
   const [date, setDate] = React.useState(txToday());
   const [touched, setTouched] = React.useState(false);
 
@@ -51,14 +63,26 @@ function AddTransactionModal({ accounts = [], onClose, onAdd }) {
   }, [onClose]);
 
   const isIncome = kind === "Income";
+  const isTransfer = kind === "Transfer";
+
+  // keep the destination valid when the source changes onto it
+  React.useEffect(() => {
+    if (isTransfer && fromAcct && fromAcct === toAcct) setToAcct(acctList.find((a) => a !== fromAcct) || "");
+  }, [fromAcct]); // eslint-disable-line
+
   const amtNum = parseFloat(String(amt).replace(/[^0-9.\-]/g, ""));
-  const validName = name.trim().length > 0;
   const validAmt = amt !== "" && !Number.isNaN(amtNum) && amtNum > 0;
-  const valid = validName && validAmt;
+  const validName = name.trim().length > 0;
+  const validTransfer = !!(fromAcct && toAcct && fromAcct !== toAcct && validAmt);
+  const valid = isTransfer ? validTransfer : (validName && validAmt);
 
   function submit() {
     setTouched(true);
     if (!valid) return;
+    if (isTransfer) {
+      onTransfer({ from: fromAcct, to: toAcct, amt: Math.abs(amtNum), date: date, note: note.trim() });
+      return;
+    }
     const finalCat = isIncome ? "Income" : cat;
     onAdd({
       name: name.trim(),
@@ -66,61 +90,100 @@ function AddTransactionModal({ accounts = [], onClose, onAdd }) {
       amt: isIncome ? Math.abs(amtNum) : -Math.abs(amtNum),
       date: date,
       day: txDayLabel(date),
-      account: account || (accounts[0] || "Everyday Checking"),
+      account: account || (acctList[0] || "Everyday Checking"),
       icon: TX_ICON[finalCat] || "bag"
     });
   }
 
+  const titleIcon = isTransfer ? "repeat" : (TX_ICON[isIncome ? "Income" : cat] || "bag");
   return (
     <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="fs-modal" role="dialog" aria-modal="true" aria-label="Add transaction">
+      <div className="fs-modal" role="dialog" aria-modal="true" aria-label={isTransfer ? "Transfer between accounts" : "Add transaction"}>
         <div className="fs-modal-head">
-          <span className="fs-modal-title"><span className="fs-ico"><Icon name={TX_ICON[isIncome ? "Income" : cat] || "bag"} /></span>Add transaction</span>
+          <span className="fs-modal-title"><span className="fs-ico"><Icon name={titleIcon} /></span>{isTransfer ? "Transfer between accounts" : "Add transaction"}</span>
           <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
         </div>
 
         <div className="fs-grid">
           <div className="fs-field full">
             <span>Type</span>
-            {Segmented && <Segmented options={["Expense", "Income"]} value={kind} onChange={setKind} />}
+            {Segmented && <Segmented options={TYPES} value={kind} onChange={setKind} />}
           </div>
 
-          <label className="fs-field full">
-            <span>Description</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={isIncome ? "e.g. Paycheck" : "e.g. Whole Foods Market"}
-              style={touched && !validName ? { borderColor: "var(--red)" } : undefined} />
-          </label>
+          {isTransfer ?
+            <React.Fragment>
+              <label className="fs-field">
+                <span>From</span>
+                <select value={fromAcct} onChange={(e) => setFromAcct(e.target.value)}
+                  style={touched && (!fromAcct || fromAcct === toAcct) ? { borderColor: "var(--red)" } : undefined}>
+                  {acctList.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+              <label className="fs-field">
+                <span>To</span>
+                <select value={toAcct} onChange={(e) => setToAcct(e.target.value)}
+                  style={touched && (!toAcct || fromAcct === toAcct) ? { borderColor: "var(--red)" } : undefined}>
+                  <option value="" disabled>Select account{"…"}</option>
+                  {acctList.filter((a) => a !== fromAcct).map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+              <label className="fs-field">
+                <span>Amount (CAD)</span>
+                <input type="number" inputMode="decimal" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.00"
+                  style={touched && !validAmt ? { borderColor: "var(--red)" } : undefined} />
+              </label>
+              <label className="fs-field">
+                <span>Date</span>
+                <input type="date" value={date} max={txToday()} onChange={(e) => setDate(e.target.value)} />
+              </label>
+              <label className="fs-field full">
+                <span>Note (optional)</span>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Monthly savings" />
+              </label>
+              {validTransfer &&
+                <div className="fs-field full tx-transfer-note">
+                  Moves <b>{"$" + (amtNum || 0).toFixed(2)}</b> from <b>{fromAcct}</b> to <b>{toAcct}</b>. Kept out of income &amp; spending.
+                </div>}
+            </React.Fragment>
+            :
+            <React.Fragment>
+              <label className="fs-field full">
+                <span>Description</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder={isIncome ? "e.g. Paycheck" : "e.g. Whole Foods Market"}
+                  style={touched && !validName ? { borderColor: "var(--red)" } : undefined} />
+              </label>
 
-          <label className="fs-field">
-            <span>Amount (CAD)</span>
-            <input type="number" inputMode="decimal" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.00"
-              style={touched && !validAmt ? { borderColor: "var(--red)" } : undefined} />
-          </label>
-          <label className="fs-field">
-            <span>Account</span>
-            <select value={account} onChange={(e) => setAccount(e.target.value)}>
-              {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </label>
+              <label className="fs-field">
+                <span>Amount (CAD)</span>
+                <input type="number" inputMode="decimal" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.00"
+                  style={touched && !validAmt ? { borderColor: "var(--red)" } : undefined} />
+              </label>
+              <label className="fs-field">
+                <span>Account</span>
+                <select value={account} onChange={(e) => setAccount(e.target.value)}>
+                  {acctList.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
 
-          {!isIncome &&
-            <label className="fs-field">
-              <span>Category</span>
-              <select value={cat} onChange={(e) => setCat(e.target.value)}>
-                {txExpenseCats().map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
-          }
-          <label className={"fs-field" + (isIncome ? " full" : "")}>
-            <span>Date</span>
-            <input type="date" value={date} max={txToday()} onChange={(e) => setDate(e.target.value)} />
-          </label>
+              {!isIncome &&
+                <label className="fs-field">
+                  <span>Category</span>
+                  <select value={cat} onChange={(e) => setCat(e.target.value)}>
+                    {txExpenseCats().map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+              }
+              <label className={"fs-field" + (isIncome ? " full" : "")}>
+                <span>Date</span>
+                <input type="date" value={date} max={txToday()} onChange={(e) => setDate(e.target.value)} />
+              </label>
+            </React.Fragment>}
         </div>
 
         <div className="fs-modal-foot">
           <div className="right">
             {Button && <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>}
-            {Button && <Button variant="primary" size="sm" onClick={submit}>Add transaction</Button>}
+            {Button && <Button variant="primary" size="sm" onClick={submit}>{isTransfer ? "Transfer" : "Add transaction"}</Button>}
           </div>
         </div>
       </div>
@@ -1001,7 +1064,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
     let items;
     if (isStmt) {
       items = stmtSel.map((r) => ({
-        name: r.name, cat: r.cat, amt: r.amt, date: r.date, day: txDayLabel(r.date),
+        name: r.name, merchant: r.rawName || r.name, cat: r.cat, amt: r.amt, date: r.date, day: txDayLabel(r.date),
         account, account_id: selAcctId, icon: r.icon,
         // A row only reaches stmtSel when it's checked. If it's ALSO a flagged
         // duplicate, the user deliberately re-included it, so tell the server to
@@ -1018,7 +1081,7 @@ function ImportModal({ accounts = [], onClose, onImport, initialMode }) {
       items = rcptReady.map((r) => {
         const a = Math.abs(parseFloat(r.amt) || 0);
         return {
-          name: r.name || "Receipt", cat: r.cat, amt: -a, date: r.date, day: txDayLabel(r.date),
+          name: r.name || "Receipt", merchant: r.name || null, cat: r.cat, amt: -a, date: r.date, day: txDayLabel(r.date),
           account, icon: r.icon, receipt: r.url,
           review: true, reason: "Scanned receipt"
         };

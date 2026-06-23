@@ -283,8 +283,18 @@ function TxnDetailDrawer({ txn, onClose, onRecat, onRemove, onSetIcon, onViewRec
 
   function pickCategory(c) {
     if (c === txn.cat) return;
+    // Explicit "Always categorize …" opt-in → recategorize forward (the server
+    // saves a rule for future merchants) without the scope prompt.
+    if (createRule) {
+      TXP_RULES.add({ match: txn.name, cat: c });
+      if (window.ClaudActions && window.ClaudActions.recategorize) window.ClaudActions.recategorize(txn.id, c, "forward");
+      else onRecat(txn.id, c, txn.cat);
+      return;
+    }
+    // Otherwise route through requestRecat, which prompts to apply to other
+    // same-merchant transactions when any exist.
+    if (window.requestRecat) { window.requestRecat(txn.id, c); return; }
     onRecat(txn.id, c, txn.cat);
-    if (createRule) { TXP_RULES.add({ match: txn.name, cat: c }); }
   }
 
   function onAttach(e) {
