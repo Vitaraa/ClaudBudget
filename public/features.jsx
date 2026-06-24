@@ -63,8 +63,30 @@ const FT_CAD_PER_YEAR = { weekly: 52, biweekly: 26, monthly: 12, quarterly: 4, y
 const ftPerYear = (it) => (Number(it.amount) || 0) * (FT_CAD_PER_YEAR[it.cadence] != null ? FT_CAD_PER_YEAR[it.cadence] : 12);
 const ftPerMonth = (it) => ftPerYear(it) / 12;
 const ftCadLabel = (c) => ({ weekly: "weekly", biweekly: "biweekly", monthly: "monthly", quarterly: "quarterly", yearly: "yearly", annual: "yearly" }[c] || "monthly");
-/* next charge date for a live item: prefer its stored next_date; fall back to FT_REF. */
-const ftLiveNext = (it) => ftParseISO(it.next_date) || ftStrip(FT_REF);
+/* advance a date by one cadence step, in place (mirrors server maybeAdvanceRecurring) */
+const FT_CAD_STEP = {
+  weekly:    (d) => d.setDate(d.getDate() + 7),
+  biweekly:  (d) => d.setDate(d.getDate() + 14),
+  fortnightly: (d) => d.setDate(d.getDate() + 14),
+  quarterly: (d) => d.setMonth(d.getMonth() + 3),
+  yearly:    (d) => d.setFullYear(d.getFullYear() + 1),
+  annual:    (d) => d.setFullYear(d.getFullYear() + 1),
+  monthly:   (d) => d.setMonth(d.getMonth() + 1),
+};
+/* next charge date for a live item: start from its stored next_date (fall back to
+   today), then roll forward by cadence until it lands on/after today. A schedule
+   whose due date has already passed (no matching charge imported yet) otherwise
+   shows a stale PAST date and mislabels it as "today". */
+const ftLiveNext = (it) => {
+  const ref = ftStrip(FT_REF);
+  const parsed = ftParseISO(it.next_date);
+  if (!parsed) return ref;
+  let d = ftStrip(parsed);
+  if (d >= ref) return d;
+  const step = FT_CAD_STEP[String(it.cadence || "monthly").toLowerCase()] || FT_CAD_STEP.monthly;
+  for (let guard = 0; d < ref && guard < 600; guard++) step(d);
+  return ftStrip(d);
+};
 
 const FT_ACCOUNTS = ["Everyday Checking", "Emergency Savings", "Joint Checking", "Brokerage", "Roth IRA"];
 
