@@ -1541,7 +1541,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "Olive",
   "surface": "linen",
   "density": "cozy",
-  "recurringView": "timeline",
+  "recurringView": "calendar",
   "goalsLayout": "rows",
   "coverStyle": "suggested",
   "insightsPlacement": "sidebar"
@@ -3152,7 +3152,6 @@ function App() {
         <TweakRadio label="Density" value={t.density} options={["cozy", "compact"]} onChange={(v) => setTweak("density", v)} />
         <TweakSection label="Features" />
         <TweakRadio label="Insights placement" value={t.insightsPlacement} options={["bell", "labeled", "sidebar", "inline"]} onChange={(v) => setTweak("insightsPlacement", v)} />
-        <TweakRadio label="Recurring view" value={t.recurringView} options={["timeline", "calendar"]} onChange={(v) => setTweak("recurringView", v)} />
         <TweakRadio label="Goals layout" value={t.goalsLayout} options={["cards", "rows"]} onChange={(v) => setTweak("goalsLayout", v)} />
         <TweakRadio label="Cover overspend" value={t.coverStyle} options={["suggested", "manual"]} onChange={(v) => setTweak("coverStyle", v)} />
       </TweaksPanel>
