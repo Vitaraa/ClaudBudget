@@ -522,8 +522,10 @@ function RecCalendar({ items }) {
     let left = c.left - w.left;
     left = Math.max(8, Math.min(left, Math.max(8, w.width - POP_W - 8)));
     const relTop = c.top - w.top;
-    const roomBelow = w.height - (relTop + c.height);
-    const pos = roomBelow >= 210 ? { top: relTop + c.height + 6 } : { bottom: (w.height - relTop) + 6 };
+    const vh = (typeof window !== "undefined" && window.innerHeight) || 800;
+    const estH = Math.min(312, 46 + charges.length * 38 + 14); // header + rows, capped at the list max-height
+    const placeBelow = (c.bottom + 6 + estH) <= (vh - 8);       // does it fit on screen below the day?
+    const pos = placeBelow ? { top: relTop + c.height + 6 } : { bottom: (w.height - relTop) + 6 };
     setDayPop({ ...base, left, ...pos });
   };
 
