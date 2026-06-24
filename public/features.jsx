@@ -217,7 +217,6 @@ function RecurringSection({ view = "timeline", onImport }) {
       <Card widget>
         <div className="widget-head">
           <span className="widget-title">Upcoming charges</span>
-          <span className="muted">monthly view</span>
         </div>
         {items.length === 0
           ? <div className="rule-empty">
@@ -383,21 +382,25 @@ function ftEnsureCalCSS() {
   el.id = "ftcal-css";
   el.textContent = `
   .ftcal { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--card); }
-  .ftcal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; flex-wrap: wrap; }
-  .ftcal-nav { display: flex; align-items: center; gap: 8px; }
-  .ftcal-navbtn { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--border);
-    background: var(--input-bg); color: var(--text); border-radius: 10px; cursor: pointer; transition: background var(--dur-fast, .15s), color var(--dur-fast, .15s); }
+  .ftcal-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 15px 18px 13px; }
+  .ftcal-bar-side { display: flex; align-items: center; min-width: 0; }
+  .ftcal-bar-side.left { justify-self: start; }
+  .ftcal-nav { display: flex; align-items: center; gap: 6px; justify-self: center; }
+  .ftcal-navbtn { width: 32px; height: 32px; display: grid; place-items: center; border: none; background: transparent;
+    color: var(--muted); border-radius: 999px; cursor: pointer; transition: background var(--dur-fast, .15s), color var(--dur-fast, .15s); }
   .ftcal-navbtn:hover { background: var(--accent-soft); color: var(--accent); }
   .ftcal-navbtn svg { width: 16px; height: 16px; }
   .ftcal-navbtn.prev svg { transform: rotate(180deg); }
-  .ftcal-title { min-width: 132px; text-align: center; font-size: var(--text-body, 15px); font-weight: 700; letter-spacing: .01em; }
-  .ftcal-today { margin-left: 4px; border: 1px solid var(--border); background: none; color: var(--accent); font-family: inherit;
-    font-size: var(--text-xs); font-weight: 600; padding: 6px 11px; border-radius: 999px; cursor: pointer; transition: background var(--dur-fast, .15s); }
+  .ftcal-title { min-width: 120px; text-align: center; font-size: var(--text-body, 15px); font-weight: 500; color: var(--text); letter-spacing: .01em; }
+  .ftcal-today { border: none; background: transparent; color: var(--accent); font-family: inherit;
+    font-size: var(--text-xs); font-weight: 500; padding: 5px 10px; border-radius: 999px; cursor: pointer; transition: background var(--dur-fast, .15s); }
   .ftcal-today:hover { background: var(--accent-soft); }
-  .ftcal-sum { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
-  .ftcal-sum b { color: var(--red); font-weight: 700; font-size: var(--text-body, 15px); font-variant-numeric: tabular-nums; }
-  .ftcal-head { display: grid; grid-template-columns: repeat(7, 1fr); background: var(--input-bg); border-top: 1px solid var(--border); }
-  .ftcal-head span { padding: 9px 0; text-align: center; font-size: var(--text-2xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .ftcal-sum { justify-self: end; display: flex; align-items: baseline; gap: 7px; font-size: var(--text-sm); color: var(--muted); }
+  .ftcal-sep { color: var(--border); }
+  .ftcal-sum b { color: #b07650; font-weight: 500; font-size: var(--text-body, 15px); font-variant-numeric: tabular-nums; }
+  :root[data-theme="dark"] .ftcal-sum b { color: #cf9b72; }
+  .ftcal-head { display: grid; grid-template-columns: repeat(7, 1fr); background: color-mix(in srgb, var(--input-bg) 55%, var(--card)); border-top: 1px solid var(--border); }
+  .ftcal-head span { padding: 9px 0; text-align: center; font-size: var(--text-2xs); font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
   .ftcal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
   .ftcal-cell { position: relative; min-height: 96px; padding: 8px 9px; border-top: 1px solid var(--border); border-left: 1px solid var(--border);
     display: flex; flex-direction: column; gap: 6px; }
@@ -438,10 +441,13 @@ function ftEnsureCalCSS() {
   .ftcal-dl-tot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 14px 20px 18px;
     border-top: 2px solid var(--border); font-weight: 700; font-variant-numeric: tabular-nums; }
   @media (max-width: 640px) {
+    .ftcal-bar { display: flex; flex-wrap: wrap; row-gap: 8px; padding: 13px 14px; }
+    .ftcal-nav { flex: 1 1 100%; justify-content: center; order: 1; }
+    .ftcal-bar-side { order: 2; }
+    .ftcal-sum { order: 3; margin-left: auto; }
     .ftcal-cell { min-height: 62px; padding: 5px 5px; gap: 3px; }
     .ftcal-charge { padding: 3px 8px 3px 6px; gap: 5px; }
     .ftcal-charge-amt { font-size: var(--text-2xs); }
-    .ftcal-sum { width: 100%; justify-content: flex-end; }
   }`;
   document.head.appendChild(el);
 }
@@ -531,14 +537,17 @@ function RecCalendar({ items }) {
   return (
     <div className="ftcal">
       <div className="ftcal-bar">
+        <div className="ftcal-bar-side left">
+          {!isThisMonth && <button className="ftcal-today" onClick={goToday}>Today</button>}
+        </div>
         <div className="ftcal-nav">
           <button className="ftcal-navbtn prev" onClick={() => step(-1)} aria-label="Previous month"><Icon name="chevR" /></button>
           <span className="ftcal-title">{FT_MON[m]} {y}</span>
           <button className="ftcal-navbtn" onClick={() => step(1)} aria-label="Next month"><Icon name="chevR" /></button>
-          {!isThisMonth && <button className="ftcal-today" onClick={goToday}>Today</button>}
         </div>
         <div className="ftcal-sum">
           <span>{chargeDays} charge {chargeDays === 1 ? "day" : "days"}</span>
+          <span className="ftcal-sep">·</span>
           <b>{ftMoney(monthTotal, 2)}</b>
         </div>
       </div>
