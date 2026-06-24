@@ -130,6 +130,45 @@ const pgSeedGroups = () =>
     cats: g.cats.map((c) => ({ ...c, id: "seed-" + g.label + "-" + c.name }))
   }));
 
+/* ------------------------------------------------------------------
+   Savings goals  <->  Budget link
+   The Budget page's "Savings goals" group mirrors the user's real goals
+   (ClaudData.goals) as overall-progress rows (saved of target), so creating a
+   goal on the Goals page auto-populates the budget. These rows are display-only
+   and are deliberately excluded from the monthly spend math (KPIs, composition,
+   overspend/cover) since saving toward a target isn't monthly spending.
+   ------------------------------------------------------------------ */
+const PG_IS_SAVINGS_GROUP = (label) => /savings\s*goals?/i.test(label || "");
+
+/* map a real goal (server shape: have/saved, target, icon, color) to a row */
+function pgGoalRow(g) {
+  const target = g.target || 0;
+  const saved = (g.have != null ? g.have : g.saved) || 0;
+  return {
+    id: "goal-" + g.id, goalId: g.id, isGoal: true,
+    name: g.name, icon: g.icon || "target", color: g.color || PG_CAT_PALETTE[0],
+    target, saved, done: target > 0 && saved >= target,
+    pct: target > 0 ? Math.round((saved / target) * 100) : 0
+  };
+}
+function pgGoalRows() {
+  return ((window.ClaudData && window.ClaudData.goals) || []).map(pgGoalRow);
+}
+/* Fold goals into the live groups: replace the "Savings goals" group's cats with
+   goal rows (flagged isSavings); if no such group exists yet but goals do, append
+   a virtual one so a brand-new goal still appears in the budget. */
+function pgWithGoalGroup(liveGroups) {
+  const rows = pgGoalRows();
+  let saw = false;
+  const out = liveGroups.map((g) => {
+    if (!PG_IS_SAVINGS_GROUP(g.label)) return g;
+    saw = true;
+    return Object.assign({}, g, { isSavings: true, cats: rows });
+  });
+  if (!saw && rows.length) out.push({ id: "virtual-savings", label: "Savings goals", isSavings: true, cats: rows });
+  return out;
+}
+
 function BudgetPage({ coverStyle = "suggested" }) {
   const { Card, Button, ProgressBar, Segmented } = PG;
   useClaudData(); // re-render whenever the live store refreshes
@@ -137,7 +176,8 @@ function BudgetPage({ coverStyle = "suggested" }) {
   const [cover, setCover] = pgUseState(null);
   // groups are derived live from the store (ClaudData.budgetGroups + dashCategories),
   // so a brand-new user sees an empty slate and every change persists to the server.
-  const groups = PG_BUDGET_STORE.get();
+  // The "Savings goals" group is then folded to mirror the user's real goals.
+  const groups = pgWithGoalGroup(PG_BUDGET_STORE.get());
   // modal: null | { mode: "add", group } | { mode: "edit", cat, group }
   const [modal, setModal] = pgUseState(null);
   // add-group modal (separate, deliberate action — distinct from adding a category)
@@ -162,7 +202,9 @@ function BudgetPage({ coverStyle = "suggested" }) {
   function seedStarter() { ClaudActions.seedStarterBudget(); }
   function saveGroup(label) { setGroupModal(false); if (label && label.trim()) ClaudActions.addBudgetGroup(label.trim()); }
 
-  const cats = groups.flatMap((g) => g.cats);
+  // Monthly budget math (KPIs, composition, overspend, cover) is spending-only.
+  // Savings-goal rows track overall progress, not monthly spend, so exclude them.
+  const cats = groups.filter((g) => !g.isSavings).flatMap((g) => g.cats);
   const totalBudget = cats.reduce((s, c) => s + c.budget + (rollover ? c.roll : 0), 0);
   const totalSpent = cats.reduce((s, c) => s + c.spent, 0);
   const remaining = totalBudget - totalSpent;
@@ -171,7 +213,7 @@ function BudgetPage({ coverStyle = "suggested" }) {
   const monthName = pgMonthLabel();
 
   // stacked composition bar by group (spent), plus remaining
-  const groupSpend = groups.map((g) => ({
+  const groupSpend = groups.filter((g) => !g.isSavings).map((g) => ({
     label: g.label, color: BUDGET_GROUP_COLOR[g.label] || (g.cats[0] && g.cats[0].color) || "var(--accent)",
     spent: g.cats.reduce((s, c) => s + c.spent, 0)
   })).filter((g) => g.spent > 0);
@@ -235,6 +277,49 @@ function BudgetPage({ coverStyle = "suggested" }) {
     setCover(null);
   }
   const firstOver = cats.find((c) => c.spent > c.budget + (rollover ? c.roll : 0));
+
+  // ---- Savings goals group: real goals rendered as overall-progress rows ----
+  function goToGoals() { window.dispatchEvent(new CustomEvent("claud:nav", { detail: "Goals" })); }
+  function renderSavingsGroup(g, gColor) {
+    const totalSaved = g.cats.reduce((s, c) => s + c.saved, 0);
+    const totalTarget = g.cats.reduce((s, c) => s + c.target, 0);
+    return (
+      <Card widget key={g.label}>
+        <div className="widget-head">
+          <span className="widget-title"><span className="cat-dot" style={{ background: gColor, marginRight: 9 }} />{g.label}</span>
+          <span className="group-sub muted">{pgMoney(totalSaved)} of <b>{pgMoney(totalTarget)}</b></span>
+        </div>
+        <div className="cat-list">
+          {g.cats.map((c) => {
+            const toGo = Math.max(0, c.target - c.saved);
+            return (
+              <div className="cat-row" key={c.id} role="button" tabIndex={0} style={{ cursor: "pointer" }}
+                title={"View " + c.name + " in Goals"} onClick={goToGoals}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToGoals(); } }}>
+                <div className="cat-top">
+                  <span className="cat-name">
+                    <span className="goal-ico" style={{ background: c.color, color: "#fff", width: 22, height: 22 }}><Icon name={c.icon} /></span>
+                    {c.name}
+                    {c.done && <span className="roll-tag" title="Goal reached">Reached</span>}
+                  </span>
+                  <span className="cat-right">
+                    <span className="cat-fig"><b>{pgMoney(c.saved)}</b> of {pgMoney(c.target)} {"·"} <span className={c.done ? "pos" : ""}>{c.pct}%</span></span>
+                  </span>
+                </div>
+                <ProgressBar value={c.saved} max={c.target || 1} tone={c.done ? "done" : "accent"} />
+                <span className={"bud-cat-foot " + (c.done ? "pos" : "")}>
+                  {c.done ? "Goal reached" : pgMoney(toGo) + " to go"}
+                </span>
+              </div>);
+          })}
+          {g.cats.length === 0 &&
+            <div className="cat-empty">No savings goals yet {"—"} create one to track it here.</div>}
+          <button className="cat-add" onClick={goToGoals}>
+            <Icon name="target" /> {g.cats.length ? "Manage goals" : "Create a goal"}
+          </button>
+        </div>
+      </Card>);
+  }
 
   return (
     <React.Fragment>
@@ -304,7 +389,7 @@ function BudgetPage({ coverStyle = "suggested" }) {
       </Card>
 
       {/* Empty slate for a brand-new user */}
-      {groups.length === 0 &&
+      {groups.filter((g) => !g.isSavings).length === 0 &&
         <Card widget>
           <div className="bud-empty">
             <span className="bud-empty-ico"><Icon name="wallet" /></span>
@@ -320,6 +405,7 @@ function BudgetPage({ coverStyle = "suggested" }) {
       {/* Category groups */}
       {groups.map((g) => {
         const gColor = BUDGET_GROUP_COLOR[g.label] || (g.cats[0] && g.cats[0].color) || "var(--accent)";
+        if (g.isSavings) return renderSavingsGroup(g, gColor);
         const gBudget = g.cats.reduce((s, c) => s + c.budget + (rollover ? c.roll : 0), 0);
         const gSpent = g.cats.reduce((s, c) => s + c.spent, 0);
         return (

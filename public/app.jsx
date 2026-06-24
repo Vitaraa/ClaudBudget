@@ -2620,6 +2620,10 @@ function App() {
   // Investments empty-state CTA → open the add-holding modal.
   useEffect(() => { const h = () => setInvModal({ mode: "add" }); window.addEventListener("claud:add-holding", h); return () => window.removeEventListener("claud:add-holding", h); }, []);
 
+  // Cross-tab navigation: any surface can request a tab switch (e.g. a savings
+  // goal row in the Budget page linking back to the Goals page).
+  useEffect(() => { const h = (e) => { if (e.detail) setTab(e.detail); }; window.addEventListener("claud:nav", h); return () => window.removeEventListener("claud:nav", h); }, []);
+
   // requestRecat dispatches this when a category change has same-merchant
   // siblings → open the scope chooser.
   useEffect(() => { const h = (e) => setRecatReq(e.detail || null); window.addEventListener("claud:recat", h); return () => window.removeEventListener("claud:recat", h); }, []);
