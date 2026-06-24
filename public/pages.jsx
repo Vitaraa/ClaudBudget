@@ -298,7 +298,7 @@ function BudgetPage({ coverStyle = "suggested" }) {
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToGoals(); } }}>
                 <div className="cat-top">
                   <span className="cat-name">
-                    <span className="goal-ico" style={{ background: c.color, color: "#fff", width: 22, height: 22 }}><Icon name={c.icon} /></span>
+                    <span className="goal-ico" style={{ width: 22, height: 22 }}><Icon name={c.icon} /></span>
                     {c.name}
                     {c.done && <span className="roll-tag" title="Goal reached">Reached</span>}
                   </span>
