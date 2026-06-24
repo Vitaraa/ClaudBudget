@@ -425,21 +425,20 @@ function ftEnsureCalCSS() {
   .ftcal-charge-amt { font-size: var(--text-sm); font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
   .ftcal-dots { flex: none; display: inline-flex; align-items: center; gap: 3px; }
   .ftcal-dots i { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); display: block; }
-  /* day popup */
-  .ftcal-mico { flex: none; width: 36px; height: 36px; border-radius: 9px; background: var(--input-bg); color: var(--accent); display: grid; place-items: center; }
-  .ftcal-mico svg { width: 18px; height: 18px; }
-  .ftcal-dl { display: flex; flex-direction: column; padding: 0; }
-  .ftcal-dl-row { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--border); }
-  .ftcal-dl-row:first-child { border-top: none; }
-  .ftcal-dl-ico { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--input-bg); display: grid; place-items: center; color: var(--accent); }
-  .ftcal-dl-ico svg { width: 18px; height: 18px; }
-  .ftcal-dl-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-  .ftcal-dl-name { font-size: var(--text-sm); font-weight: 600; }
-  .ftcal-dl-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--text-2xs); color: var(--muted); }
-  .ftcal-dl-chip { padding: 2px 8px; border-radius: 999px; font-weight: 600; }
-  .ftcal-dl-amt { font-weight: 700; font-variant-numeric: tabular-nums; }
-  .ftcal-dl-tot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 14px 20px 18px;
-    border-top: 2px solid var(--border); font-weight: 700; font-variant-numeric: tabular-nums; }
+  /* day popover (anchored to the clicked day) */
+  .ftcal-wrap { position: relative; }
+  .ftcal-pop { position: absolute; z-index: 30; width: 272px; max-width: calc(100vw - 24px); background: var(--input-bg);
+    border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow-modal, 0 12px 30px rgba(74, 48, 24, .18)); overflow: hidden; }
+  .ftcal-pop-head { padding: 11px 15px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); font-size: var(--text-sm); color: var(--muted); }
+  .ftcal-pop-head b { color: #b07650; font-weight: 500; font-variant-numeric: tabular-nums; }
+  :root[data-theme="dark"] .ftcal-pop-head b { color: #cf9b72; }
+  .ftcal-pop-sep { color: var(--border); }
+  .ftcal-pop-list { padding: 6px 0; max-height: 256px; overflow-y: auto; }
+  .ftcal-pop-row { display: flex; align-items: center; gap: 11px; padding: 8px 15px; }
+  .ftcal-pop-ico { flex: none; width: 18px; display: grid; place-items: center; color: var(--accent); }
+  .ftcal-pop-ico svg { width: 18px; height: 18px; }
+  .ftcal-pop-name { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ftcal-pop-amt { flex: none; font-size: var(--text-sm); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   @media (max-width: 640px) {
     .ftcal-bar { display: flex; flex-wrap: wrap; row-gap: 8px; padding: 13px 14px; }
     .ftcal-nav { flex: 1 1 100%; justify-content: center; order: 1; }
@@ -452,51 +451,31 @@ function ftEnsureCalCSS() {
   document.head.appendChild(el);
 }
 
-/* ---- day detail popup (opened by clicking a day with charges) ---- */
-function RecDayModal({ date, items, onClose }) {
+/* ---- day popover (opens anchored to the clicked day) ---- */
+function RecDayPop({ pop, onClose }) {
   ftEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onDown = (e) => { if (!(e.target && e.target.closest && e.target.closest(".ftcal-pop"))) onClose(); };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onDown); };
   }, [onClose]);
 
-  const total = items.reduce((s, x) => s + (Number(x.amount) || 0), 0);
-  const isToday = ftDayLabel(date, FT_REF) === "Today";
-  const heading = FT_WD[date.getDay()] + ", " + FT_MON[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear();
+  const total = pop.items.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const label = FT_MON3[pop.date.getMonth()] + " " + pop.date.getDate();
+  const style = { left: pop.left + "px" };
+  if (pop.top != null) style.top = pop.top + "px"; else style.bottom = pop.bottom + "px";
 
   return (
-    <div className="fs-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="fs-modal" role="dialog" aria-modal="true" aria-label={"Charges on " + heading}>
-        <div className="fs-modal-head">
-          <span className="fs-modal-title">
-            <span className="ftcal-mico"><Icon name="repeat" /></span>
-            {isToday ? "Today · " : ""}{heading}
-          </span>
-          <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
-        </div>
-        <div className="ftcal-dl">
-          {items.map((it) => {
-            const catColor = FT_CAT_COLOR[it.category] || "var(--accent)";
-            const acct = ftAcctName(it.account_id);
-            return (
-              <div className="ftcal-dl-row" key={it.id}>
-                <span className="ftcal-dl-ico"><Icon name={it.icon || "repeat"} /></span>
-                <div className="ftcal-dl-main">
-                  <span className="ftcal-dl-name">{it.name}</span>
-                  <span className="ftcal-dl-meta">
-                    {it.category && <span className="ftcal-dl-chip" style={{ background: catColor + "22", color: catColor }}>{it.category}</span>}
-                    <span>{ftCadLabel(it.cadence)}</span>
-                    {acct && <span>{"· " + acct}</span>}
-                  </span>
-                </div>
-                <span className="ftcal-dl-amt">{ftMoney(it.amount, 2)}</span>
-              </div>);
-          })}
-        </div>
-        <div className="ftcal-dl-tot">
-          <span>{items.length} {items.length === 1 ? "charge" : "charges"}</span>
-          <span>{ftMoney(total, 2)}</span>
-        </div>
+    <div className="ftcal-pop" style={style} role="dialog" aria-label={"Charges on " + label}>
+      <div className="ftcal-pop-head">{label} <span className="ftcal-pop-sep">·</span> <b>{ftMoney(total, 2)}</b></div>
+      <div className="ftcal-pop-list">
+        {pop.items.map((it) => (
+          <div className="ftcal-pop-row" key={it.id}>
+            <span className="ftcal-pop-ico"><Icon name={it.icon || "repeat"} /></span>
+            <span className="ftcal-pop-name">{it.name}</span>
+            <span className="ftcal-pop-amt">{ftMoney(it.amount, 2)}</span>
+          </div>))}
       </div>
     </div>);
 }
@@ -505,11 +484,12 @@ function RecDayModal({ date, items, onClose }) {
 function RecCalendar({ items }) {
   ftEnsureCalCSS();
   const [cursor, setCursor] = ftState(() => ({ y: FT_REF.getFullYear(), m: FT_REF.getMonth() }));
-  const [dayModal, setDayModal] = ftState(null); // { date, items }
+  const [dayPop, setDayPop] = ftState(null); // { date, items, left, top|bottom }
+  const wrapRef = React.useRef(null);
   const { y, m } = cursor;
 
-  const step = (delta) => setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
-  const goToday = () => setCursor({ y: FT_REF.getFullYear(), m: FT_REF.getMonth() });
+  const step = (delta) => { setDayPop(null); setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
+  const goToday = () => { setDayPop(null); setCursor({ y: FT_REF.getFullYear(), m: FT_REF.getMonth() }); };
 
   // every charge that lands in the viewed month, grouped by day-of-month
   const byDay = {};
@@ -532,9 +512,23 @@ function RecCalendar({ items }) {
   const todayMs = ftStrip(FT_REF).getTime();
   const chargeDays = Object.keys(byDay).length;
   const monthTotal = Object.keys(byDay).reduce((s, k) => s + byDay[k].reduce((a, x) => a + (Number(x.amount) || 0), 0), 0);
-  const open = (d, charges) => setDayModal({ date: new Date(y, m, d), items: charges });
+  const open = (e, d, charges) => {
+    const wrapEl = wrapRef.current;
+    const base = { date: new Date(y, m, d), items: charges };
+    if (!wrapEl) { setDayPop({ ...base, left: 8, top: 8 }); return; }
+    const c = e.currentTarget.getBoundingClientRect();
+    const w = wrapEl.getBoundingClientRect();
+    const POP_W = 272;
+    let left = c.left - w.left;
+    left = Math.max(8, Math.min(left, Math.max(8, w.width - POP_W - 8)));
+    const relTop = c.top - w.top;
+    const roomBelow = w.height - (relTop + c.height);
+    const pos = roomBelow >= 210 ? { top: relTop + c.height + 6 } : { bottom: (w.height - relTop) + 6 };
+    setDayPop({ ...base, left, ...pos });
+  };
 
   return (
+    <div className="ftcal-wrap" ref={wrapRef}>
     <div className="ftcal">
       <div className="ftcal-bar">
         <div className="ftcal-bar-side left">
@@ -563,10 +557,10 @@ function RecCalendar({ items }) {
           const cls = "ftcal-cell" + (isToday ? " today" : "") + (past ? " past" : "") + (has ? " has" : "");
           return (
             <div className={cls} key={d}
-              onClick={has ? () => open(d, charges) : undefined}
+              onClick={has ? (e) => open(e, d, charges) : undefined}
               role={has ? "button" : undefined}
               tabIndex={has ? 0 : undefined}
-              onKeyDown={has ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(d, charges); } } : undefined}
+              onKeyDown={has ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e, d, charges); } } : undefined}
               title={has ? (charges.length + " charge" + (charges.length > 1 ? "s" : "") + " · " + ftMoney(tot, 2)) : undefined}>
               <div className="ftcal-daytop">
                 <span className="ftcal-daynum">{d}</span>
@@ -585,7 +579,8 @@ function RecCalendar({ items }) {
             </div>);
         })}
       </div>
-      {dayModal && <RecDayModal date={dayModal.date} items={dayModal.items} onClose={() => setDayModal(null)} />}
+      </div>
+      {dayPop && <RecDayPop pop={dayPop} onClose={() => setDayPop(null)} />}
     </div>);
 }
 
