@@ -423,8 +423,8 @@ function ftEnsureCalCSS() {
   .ftcal-dots { flex: none; display: inline-flex; align-items: center; gap: 3px; }
   .ftcal-dots i { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); display: block; }
   /* day popup */
-  .ftcal-dl { display: flex; flex-direction: column; padding: 2px 2px 0; }
-  .ftcal-dl-row { display: flex; align-items: center; gap: 12px; padding: 11px 6px; border-top: 1px solid var(--border); }
+  .ftcal-dl { display: flex; flex-direction: column; padding: 0; }
+  .ftcal-dl-row { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--border); }
   .ftcal-dl-row:first-child { border-top: none; }
   .ftcal-dl-ico { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--input-bg); display: grid; place-items: center; color: var(--accent); }
   .ftcal-dl-ico svg { width: 18px; height: 18px; }
@@ -433,7 +433,7 @@ function ftEnsureCalCSS() {
   .ftcal-dl-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: var(--text-2xs); color: var(--muted); }
   .ftcal-dl-chip { padding: 2px 8px; border-radius: 999px; font-weight: 600; }
   .ftcal-dl-amt { font-weight: 700; font-variant-numeric: tabular-nums; }
-  .ftcal-dl-tot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 12px 6px 2px;
+  .ftcal-dl-tot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 14px 20px 18px;
     border-top: 2px solid var(--border); font-weight: 700; font-variant-numeric: tabular-nums; }
   @media (max-width: 640px) {
     .ftcal-cell { min-height: 62px; padding: 5px 5px; gap: 3px; }
