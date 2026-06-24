@@ -423,6 +423,8 @@ function ftEnsureCalCSS() {
   .ftcal-dots { flex: none; display: inline-flex; align-items: center; gap: 3px; }
   .ftcal-dots i { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); display: block; }
   /* day popup */
+  .ftcal-mico { flex: none; width: 36px; height: 36px; border-radius: 9px; background: var(--input-bg); color: var(--accent); display: grid; place-items: center; }
+  .ftcal-mico svg { width: 18px; height: 18px; }
   .ftcal-dl { display: flex; flex-direction: column; padding: 0; }
   .ftcal-dl-row { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--border); }
   .ftcal-dl-row:first-child { border-top: none; }
@@ -461,7 +463,7 @@ function RecDayModal({ date, items, onClose }) {
       <div className="fs-modal" role="dialog" aria-modal="true" aria-label={"Charges on " + heading}>
         <div className="fs-modal-head">
           <span className="fs-modal-title">
-            <span className="fs-ico goalp-ico sm"><Icon name="repeat" /></span>
+            <span className="ftcal-mico"><Icon name="repeat" /></span>
             {isToday ? "Today · " : ""}{heading}
           </span>
           <button className="fs-modal-close" onClick={onClose} aria-label="Close">{"×"}</button>
